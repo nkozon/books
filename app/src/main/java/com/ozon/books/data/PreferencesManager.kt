@@ -61,6 +61,11 @@ class PreferencesManager(context: Context) {
     )
     val fontFamily: StateFlow<String> = _fontFamily.asStateFlow()
 
+    private val _isPaginated = MutableStateFlow(
+        prefs.getBoolean(KEY_IS_PAGINATED, true)
+    )
+    val isPaginated: StateFlow<Boolean> = _isPaginated.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
         _themeMode.value = mode
@@ -100,6 +105,11 @@ class PreferencesManager(context: Context) {
         _fontFamily.value = family
     }
 
+    fun setIsPaginated(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_IS_PAGINATED, enabled).apply()
+        _isPaginated.value = enabled
+    }
+
     companion object {
         const val DEFAULT_FONT_SIZE_PX = 16
         private const val KEY_THEME_MODE = "key_theme_mode"
@@ -109,6 +119,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_FONT_SIZE_PX = "key_font_size_px"
         private const val KEY_OLD_FONT_SIZE = "key_font_size"
         private const val KEY_FONT_FAMILY = "key_font_family"
+        private const val KEY_IS_PAGINATED = "key_is_paginated"
 
         @Volatile
         private var INSTANCE: PreferencesManager? = null
