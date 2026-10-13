@@ -1,6 +1,7 @@
 package com.ozon.books
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,18 +14,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.lifecycleScope
-import com.ozon.books.data.BookRepository
 import com.ozon.books.data.PreferencesManager
 import com.ozon.books.ui.MainApp
 import com.ozon.books.ui.theme.BooksTheme
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
-    private val bookRepository by lazy { BookRepository.getInstance(applicationContext) }
     private val preferencesManager by lazy { PreferencesManager.getInstance(applicationContext) }
-    private var initialBookId by mutableStateOf<String?>(null)
+    private var pendingImportUri by mutableStateOf<Uri?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,8 +47,8 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     MainApp(
-                        initialBookIdToOpen = initialBookId,
-                        onInitialBookOpened = { initialBookId = null }
+                        pendingImportUri = pendingImportUri,
+                        onImportUriConsumed = { pendingImportUri = null }
                     )
                 }
             }
@@ -60,17 +57,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleViewIntent(intent)
     }
 
     private fun handleViewIntent(intent: Intent?) {
         val uri = intent?.data
         if (uri != null && intent.action == Intent.ACTION_VIEW) {
-            lifecycleScope.launch {
-                bookRepository.importBookFromUri(uri).onSuccess { book ->
-                    initialBookId = book.id
-                }
-            }
+            pendingImportUri = uri
+            intent.data = null
         }
     }
 }

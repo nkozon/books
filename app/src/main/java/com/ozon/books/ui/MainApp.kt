@@ -12,19 +12,23 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
@@ -33,11 +37,14 @@ import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -81,8 +88,8 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainApp(
-    initialBookIdToOpen: String? = null,
-    onInitialBookOpened: (() -> Unit)? = null
+    pendingImportUri: Uri? = null,
+    onImportUriConsumed: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val repository = remember { BookRepository.getInstance(context) }
@@ -105,16 +112,36 @@ fun MainApp(
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var activeReadingBookId by remember { mutableStateOf<String?>(null) }
+    var isImporting by remember { mutableStateOf(false) }
 
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
     var sortOrder by remember { mutableStateOf(BookSortOrder.RECENT) }
 
-    // Safely consume one-time initial book open request
-    LaunchedEffect(initialBookIdToOpen) {
-        if (initialBookIdToOpen != null) {
-            activeReadingBookId = initialBookIdToOpen
-            onInitialBookOpened?.invoke()
+    fun importBook(uri: Uri) {
+        if (isImporting) return
+        coroutineScope.launch {
+            isImporting = true
+            try {
+                val result = repository.importBookFromUri(uri)
+                result.onSuccess { book ->
+                    snackbarHostState.showSnackbar("Imported \"${book.title}\" to Library")
+                    activeReadingBookId = book.id
+                }.onFailure { error ->
+                    snackbarHostState.showSnackbar("Failed to import EPUB: ${error.localizedMessage ?: "Unknown error"}")
+                }
+            } finally {
+                isImporting = false
+            }
+        }
+    }
+
+    // Safely consume one-time pending import URI request
+    LaunchedEffect(pendingImportUri) {
+        if (pendingImportUri != null) {
+            val uriToImport = pendingImportUri
+            onImportUriConsumed?.invoke()
+            importBook(uriToImport)
         }
     }
 
@@ -123,15 +150,7 @@ fun MainApp(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            coroutineScope.launch {
-                val result = repository.importBookFromUri(uri)
-                result.onSuccess { book ->
-                    snackbarHostState.showSnackbar("Imported \"${book.title}\" to Library")
-                    activeReadingBookId = book.id
-                }.onFailure { error ->
-                    snackbarHostState.showSnackbar("Failed to import EPUB: ${error.localizedMessage ?: "Unknown error"}")
-                }
-            }
+            importBook(uri)
         }
     }
 
@@ -142,6 +161,41 @@ fun MainApp(
                 "application/octet-stream",
                 "*/*"
             )
+        )
+    }
+
+    if (isImporting) {
+        AlertDialog(
+            onDismissRequest = { /* Prevent dismiss while importing */ },
+            confirmButton = {},
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            shape = RoundedCornerShape(28.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            title = {
+                Text(
+                    text = "Importing Book",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(36.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 3.dp
+                    )
+                    Text(
+                        text = "Extracting EPUB content, please wait...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         )
     }
 
