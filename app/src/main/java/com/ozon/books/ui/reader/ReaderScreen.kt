@@ -7,13 +7,19 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -60,6 +66,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -67,12 +74,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -92,6 +107,7 @@ import com.ozon.books.ui.components.SettingsItemContainer
 import com.ozon.books.ui.theme.LocalThemeIsDark
 import com.ozon.books.ui.theme.LocalThemeIsOled
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -104,6 +120,13 @@ sealed class ChapterElement {
 }
 
 data class ChapterPage(val elements: List<ChapterElement>)
+
+data class BookPage(
+    val chapterIndex: Int,
+    val pageIndexInChapter: Int,
+    val totalPagesInChapter: Int,
+    val elements: List<ChapterElement>
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,21 +144,37 @@ fun ReaderScreen(
     val isPaginated by preferencesManager.isPaginated.collectAsState()
     val coroutineScope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val fontScale = density.fontScale
 
-    val screenWidthDp = configuration.screenWidthDp
-    val screenHeightDp = configuration.screenHeightDp
+    val topStatusPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val bottomNavPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+    // Page text fills the screen from just below the status bar to above the nav bar / counter
+    val pageTopPadding = topStatusPadding + 4.dp
+    val pageBottomPadding = bottomNavPadding + 22.dp
+    val pageHorizontalPadding = 16.dp
+
+    var contentWidthDp by remember { mutableIntStateOf((configuration.screenWidthDp - 32).coerceAtLeast(200)) }
+    var contentHeightDp by remember { mutableIntStateOf((configuration.screenHeightDp - 60).coerceAtLeast(300)) }
 
     var book by remember { mutableStateOf<Book?>(null) }
     var chapters by remember { mutableStateOf<List<Chapter>>(emptyList()) }
     var currentChapterIndex by remember { mutableIntStateOf(0) }
     var fontSizePx by remember { mutableIntStateOf(savedFontSize) }
-    var rawHtml by remember { mutableStateOf("") }
-    var pendingLastPage by remember { mutableStateOf(false) }
 
     var showControls by remember { mutableStateOf(true) }
     var showTocSheet by remember { mutableStateOf(false) }
     var showSettingsPopup by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
+
+    val rawElementsMap = remember { mutableMapOf<Int, List<ChapterElement>>() }
+    var allBookPages by remember { mutableStateOf<List<BookPage>>(emptyList()) }
+    var hasInitializedScroll by remember { mutableStateOf(false) }
+
+    var targetPageIndex by remember { mutableIntStateOf(0) }
+    var lastTapTime by remember { mutableLongStateOf(0L) }
+    var scrollJob by remember { mutableStateOf<Job?>(null) }
 
     LaunchedEffect(savedFontSize) {
         fontSizePx = savedFontSize
@@ -148,81 +187,171 @@ fun ReaderScreen(
             currentChapterIndex = loadedBook.currentChapterIndex
             chapters = repository.getChapters(loadedBook)
         }
+    }
+
+    // Parse and paginate all chapters into a unified page list across the entire book
+    LaunchedEffect(chapters, fontSizePx, fontFamily, fontScale, contentWidthDp, contentHeightDp) {
+        if (chapters.isEmpty()) return@LaunchedEffect
+        val pagesList = withContext(Dispatchers.IO) {
+            for (ch in chapters) {
+                if (!rawElementsMap.containsKey(ch.index)) {
+                    val html = try {
+                        File(ch.absolutePath).readText()
+                    } catch (_: Exception) {
+                        "<p>Error loading chapter content.</p>"
+                    }
+                    val elems = NativeChapterParser.parse(html, File(ch.absolutePath))
+                    rawElementsMap[ch.index] = elems
+                }
+            }
+            val list = mutableListOf<BookPage>()
+            for (ch in chapters) {
+                val elems = rawElementsMap[ch.index] ?: emptyList()
+                val chPages = NativeChapterParser.paginate(
+                    elements = elems,
+                    fontSizePx = fontSizePx,
+                    fontFamilyName = fontFamily,
+                    fontScale = fontScale,
+                    contentWidthDp = contentWidthDp,
+                    contentHeightDp = contentHeightDp
+                )
+                val totalInCh = chPages.size
+                for ((pIdx, page) in chPages.withIndex()) {
+                    list.add(
+                        BookPage(
+                            chapterIndex = ch.index,
+                            pageIndexInChapter = pIdx,
+                            totalPagesInChapter = totalInCh,
+                            elements = page.elements
+                        )
+                    )
+                }
+            }
+            list
+        }
+        allBookPages = pagesList
         isLoading = false
     }
 
-    val currentChapter = chapters.getOrNull(currentChapterIndex)
+    val pagerState = rememberPagerState(
+        initialPage = 0,
+        pageCount = { allBookPages.size.coerceAtLeast(1) }
+    )
 
-    LaunchedEffect(currentChapter?.absolutePath) {
-        if (currentChapter != null) {
-            rawHtml = withContext(Dispatchers.IO) {
-                try {
-                    File(currentChapter.absolutePath).readText()
-                } catch (_: Exception) {
-                    "<p>Error loading chapter content.</p>"
+    val listState = rememberLazyListState()
+
+    // Initialize scroll position to book's saved chapter on first load
+    LaunchedEffect(allBookPages.size) {
+        if (!hasInitializedScroll && allBookPages.isNotEmpty() && book != null) {
+            val initialCh = book!!.currentChapterIndex
+            val target = allBookPages.indexOfFirst { it.chapterIndex == initialCh }.coerceAtLeast(0)
+            pagerState.scrollToPage(target)
+            targetPageIndex = target
+            hasInitializedScroll = true
+        } else if (hasInitializedScroll && allBookPages.isNotEmpty() && pagerState.currentPage >= allBookPages.size) {
+            val target = allBookPages.lastIndex
+            pagerState.scrollToPage(target)
+            targetPageIndex = target
+        }
+    }
+
+    // Synchronize targetPageIndex when user is not spam-tapping
+    LaunchedEffect(pagerState.currentPage) {
+        if (System.currentTimeMillis() - lastTapTime >= 400L) {
+            targetPageIndex = pagerState.currentPage
+        }
+    }
+
+    val currentPage = allBookPages.getOrNull(pagerState.currentPage)
+    val activeChapterIndex = currentPage?.chapterIndex ?: currentChapterIndex
+    val currentChapter = chapters.getOrNull(activeChapterIndex)
+
+    // Save reading progress when currentPage changes
+    LaunchedEffect(pagerState.currentPage, allBookPages.size) {
+        val page = currentPage ?: return@LaunchedEffect
+        currentChapterIndex = page.chapterIndex
+        val progress = if (allBookPages.isNotEmpty()) {
+            pagerState.currentPage.toFloat() / allBookPages.size.toFloat()
+        } else 0f
+        repository.updateReadingProgress(bookId, page.chapterIndex, progress)
+    }
+
+    fun nextPage() {
+        if (allBookPages.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val isSpamming = (now - lastTapTime) < 400L
+        lastTapTime = now
+
+        val base = maxOf(pagerState.currentPage, targetPageIndex)
+        val target = (base + 1).coerceAtMost(allBookPages.lastIndex)
+
+        if (target != pagerState.currentPage || target != targetPageIndex) {
+            targetPageIndex = target
+            scrollJob?.cancel()
+            scrollJob = coroutineScope.launch {
+                if (isSpamming) {
+                    pagerState.scrollToPage(target)
+                } else {
+                    pagerState.animateScrollToPage(
+                        page = target,
+                        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
+                    )
                 }
             }
         }
     }
 
-    // Parse elements natively
-    val elements = remember(rawHtml, currentChapter?.absolutePath) {
-        if (currentChapter != null && rawHtml.isNotBlank()) {
-            NativeChapterParser.parse(rawHtml, File(currentChapter.absolutePath))
-        } else {
-            emptyList()
-        }
-    }
+    fun prevPage() {
+        if (allBookPages.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val isSpamming = (now - lastTapTime) < 400L
+        lastTapTime = now
 
-    // Paginate elements for Pages view
-    val pages = remember(elements, fontSizePx, screenWidthDp, screenHeightDp) {
-        NativeChapterParser.paginate(elements, fontSizePx, screenWidthDp, screenHeightDp)
-    }
+        val base = minOf(pagerState.currentPage, targetPageIndex)
+        val target = (base - 1).coerceAtLeast(0)
 
-    val pagerState = rememberPagerState(
-        initialPage = 0,
-        pageCount = { pages.size.coerceAtLeast(1) }
-    )
-
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(currentChapterIndex, pages.size) {
-        if (pendingLastPage && pages.isNotEmpty()) {
-            pagerState.scrollToPage(pages.lastIndex)
-            pendingLastPage = false
-        } else if (!pendingLastPage) {
-            pagerState.scrollToPage(0)
-            listState.scrollToItem(0)
+        if (target != pagerState.currentPage || target != targetPageIndex) {
+            targetPageIndex = target
+            scrollJob?.cancel()
+            scrollJob = coroutineScope.launch {
+                if (isSpamming) {
+                    pagerState.scrollToPage(target)
+                } else {
+                    pagerState.animateScrollToPage(
+                        page = target,
+                        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
+                    )
+                }
+            }
         }
     }
 
     fun changeChapter(newIndex: Int, startAtLastPage: Boolean = false) {
-        if (newIndex in chapters.indices && book != null) {
-            currentChapterIndex = newIndex
-            pendingLastPage = startAtLastPage
-            coroutineScope.launch {
-                repository.updateReadingProgress(book!!.id, newIndex, 0f)
+        if (newIndex !in chapters.indices) return
+        currentChapterIndex = newIndex
+        if (isPaginated) {
+            val target = if (startAtLastPage) {
+                allBookPages.indexOfLast { it.chapterIndex == newIndex }
+            } else {
+                allBookPages.indexOfFirst { it.chapterIndex == newIndex }
             }
-        }
-    }
-
-    fun nextPage() {
-        if (pagerState.currentPage < pages.lastIndex) {
-            coroutineScope.launch {
-                pagerState.animateScrollToPage(pagerState.currentPage + 1)
+            if (target != -1) {
+                targetPageIndex = target
+                scrollJob?.cancel()
+                scrollJob = coroutineScope.launch {
+                    pagerState.scrollToPage(target)
+                }
             }
-        } else if (currentChapterIndex < chapters.lastIndex) {
-            changeChapter(currentChapterIndex + 1, startAtLastPage = false)
-        }
-    }
-
-    fun prevPage() {
-        if (pagerState.currentPage > 0) {
+        } else {
             coroutineScope.launch {
-                pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                listState.scrollToItem(0)
             }
-        } else if (currentChapterIndex > 0) {
-            changeChapter(currentChapterIndex - 1, startAtLastPage = true)
+            val progress = if (chapters.isNotEmpty()) {
+                newIndex.toFloat() / chapters.size.toFloat()
+            } else 0f
+            coroutineScope.launch {
+                repository.updateReadingProgress(bookId, newIndex, progress)
+            }
         }
     }
 
@@ -255,39 +384,70 @@ fun ReaderScreen(
     }
     val textColor = if (isDark) Color(0xFFE6E0E9) else Color(0xFF1D1B20)
 
-    val topStatusPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val bottomNavPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-
-    val topContentPadding = topStatusPadding + 64.dp
-    val bottomContentPadding = bottomNavPadding + 80.dp
-
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(backgroundColor)
     ) {
+        val measuredWidthDp = maxWidth.value.toInt()
+        val measuredHeightDp = maxHeight.value.toInt()
+        val actualContentWidth = (measuredWidthDp - (pageHorizontalPadding * 2).value.toInt()).coerceAtLeast(200)
+        val actualContentHeight = (measuredHeightDp - (pageTopPadding + pageBottomPadding).value.toInt()).coerceAtLeast(300)
+
+        LaunchedEffect(actualContentWidth, actualContentHeight) {
+            if (contentWidthDp != actualContentWidth || contentHeightDp != actualContentHeight) {
+                contentWidthDp = actualContentWidth
+                contentHeightDp = actualContentHeight
+            }
+        }
+
         // Native Content: Paged view or Continuous Scroll view
-        if (elements.isEmpty()) {
+        if (allBookPages.isEmpty() && isPaginated) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "No content available in this chapter.",
+                    text = "No content available in this book.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = textColor
                 )
             }
         } else if (isPaginated) {
-            // Paginated View: Native HorizontalPager
+            // Paginated View: Native HorizontalPager across all book pages
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(pages.size, currentChapterIndex) {
-                        detectTapGestures { offset ->
-                            val width = size.width
-                            val ratio = offset.x / width.toFloat()
-                            when {
-                                ratio < 0.22f -> prevPage()
-                                ratio > 0.78f -> nextPage()
-                                else -> showControls = !showControls
+                    .pointerInput(allBookPages.size) {
+                        val width = size.width
+                        val touchSlop = viewConfiguration.touchSlop
+
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val downPos = down.position
+                            var isDrag = false
+                            var upChange: PointerInputChange? = null
+
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Main)
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+
+                                if (!change.pressed) {
+                                    upChange = change
+                                    break
+                                }
+
+                                val totalDistance = (change.position - downPos).getDistance()
+                                if (totalDistance > touchSlop) {
+                                    isDrag = true
+                                }
+                            }
+
+                            if (!isDrag && upChange != null) {
+                                upChange.consume()
+                                val ratio = downPos.x / width.toFloat()
+                                when {
+                                    ratio < 0.22f -> prevPage()
+                                    ratio > 0.78f -> nextPage()
+                                    else -> showControls = !showControls
+                                }
                             }
                         }
                     }
@@ -296,14 +456,14 @@ fun ReaderScreen(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
                 ) { pageIndex ->
-                    val page = pages.getOrNull(pageIndex)
+                    val page = allBookPages.getOrNull(pageIndex)
                     if (page != null) {
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(horizontal = 24.dp)
-                                .padding(top = topContentPadding, bottom = bottomContentPadding),
-                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                                .padding(horizontal = pageHorizontalPadding)
+                                .padding(top = pageTopPadding, bottom = pageBottomPadding),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             page.elements.forEach { element ->
                                 ChapterElementItem(
@@ -322,10 +482,10 @@ fun ReaderScreen(
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = bottomNavPadding + 10.dp)
+                            .padding(bottom = bottomNavPadding + 4.dp)
                     ) {
                         Text(
-                            text = "${pagerState.currentPage + 1} / ${pages.size}",
+                            text = "${(currentPage?.pageIndexInChapter ?: 0) + 1} / ${currentPage?.totalPagesInChapter ?: 1}",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
                             color = textColor.copy(alpha = 0.45f)
                         )
@@ -334,26 +494,57 @@ fun ReaderScreen(
             }
         } else {
             // Scroll View: Native LazyColumn with edge tapping and smooth scrolling
+            val currentChapterElements = rawElementsMap[activeChapterIndex] ?: emptyList()
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
-                        detectTapGestures { offset ->
-                            val width = size.width
-                            val ratio = offset.x / width.toFloat()
-                            when {
-                                ratio < 0.22f -> {
-                                    coroutineScope.launch {
-                                        listState.animateScrollBy(-550f)
-                                    }
+                        val width = size.width
+                        val touchSlop = viewConfiguration.touchSlop
+
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val downPos = down.position
+                            var isDrag = false
+                            var upChange: PointerInputChange? = null
+
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Main)
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) {
+                                    upChange = change
+                                    break
                                 }
-                                ratio > 0.78f -> {
-                                    coroutineScope.launch {
-                                        listState.animateScrollBy(550f)
-                                    }
+                                if ((change.position - downPos).getDistance() > touchSlop) {
+                                    isDrag = true
                                 }
-                                else -> {
-                                    showControls = !showControls
+                            }
+
+                            if (!isDrag && upChange != null) {
+                                upChange.consume()
+                                val ratio = downPos.x / width.toFloat()
+                                when {
+                                    ratio < 0.22f -> {
+                                        coroutineScope.launch {
+                                            if (listState.isScrollInProgress) {
+                                                listState.scrollBy(-550f)
+                                            } else {
+                                                listState.animateScrollBy(-550f)
+                                            }
+                                        }
+                                    }
+                                    ratio > 0.78f -> {
+                                        coroutineScope.launch {
+                                            if (listState.isScrollInProgress) {
+                                                listState.scrollBy(550f)
+                                            } else {
+                                                listState.animateScrollBy(550f)
+                                            }
+                                        }
+                                    }
+                                    else -> {
+                                        showControls = !showControls
+                                    }
                                 }
                             }
                         }
@@ -363,14 +554,14 @@ fun ReaderScreen(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
-                        start = 24.dp,
-                        end = 24.dp,
-                        top = topContentPadding,
-                        bottom = bottomContentPadding
+                        start = pageHorizontalPadding,
+                        end = pageHorizontalPadding,
+                        top = pageTopPadding,
+                        bottom = pageBottomPadding
                     ),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(elements) { element ->
+                    items(currentChapterElements) { element ->
                         ChapterElementItem(
                             element = element,
                             fontSizePx = fontSizePx,
@@ -404,7 +595,7 @@ fun ReaderScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = currentChapter?.title ?: "Chapter ${currentChapterIndex + 1}",
+                                text = currentChapter?.title ?: "Chapter ${activeChapterIndex + 1}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -638,10 +829,10 @@ fun ReaderScreen(
                             if (isPaginated) {
                                 prevPage()
                             } else {
-                                changeChapter(currentChapterIndex - 1)
+                                changeChapter(activeChapterIndex - 1)
                             }
                         },
-                        enabled = if (isPaginated) (pagerState.currentPage > 0 || currentChapterIndex > 0) else currentChapterIndex > 0,
+                        enabled = if (isPaginated) pagerState.currentPage > 0 else activeChapterIndex > 0,
                         icon = Icons.AutoMirrored.Rounded.ArrowBack,
                         contentDescription = if (isPaginated) "Previous Page" else "Previous Chapter",
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -650,24 +841,27 @@ fun ReaderScreen(
 
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         if (isPaginated) {
+                            val pageInCh = (currentPage?.pageIndexInChapter ?: 0) + 1
+                            val totalInCh = currentPage?.totalPagesInChapter ?: 1
+                            val chNum = activeChapterIndex + 1
                             Text(
-                                text = "Page ${pagerState.currentPage + 1} of ${pages.size}",
+                                text = "Page $pageInCh of $totalInCh",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Chapter ${currentChapterIndex + 1} of ${chapters.size}",
+                                text = "Chapter $chNum of ${chapters.size}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         } else {
                             Text(
-                                text = "Chapter ${currentChapterIndex + 1} of ${chapters.size}",
+                                text = "Chapter ${activeChapterIndex + 1} of ${chapters.size}",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "${((currentChapterIndex + 1).toFloat() / chapters.size.coerceAtLeast(1) * 100).toInt()}% completed",
+                                text = "${((activeChapterIndex + 1).toFloat() / chapters.size.coerceAtLeast(1) * 100).toInt()}% completed",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -679,10 +873,10 @@ fun ReaderScreen(
                             if (isPaginated) {
                                 nextPage()
                             } else {
-                                changeChapter(currentChapterIndex + 1)
+                                changeChapter(activeChapterIndex + 1)
                             }
                         },
-                        enabled = if (isPaginated) (pagerState.currentPage < pages.lastIndex || currentChapterIndex < chapters.lastIndex) else currentChapterIndex < chapters.lastIndex,
+                        enabled = if (isPaginated) pagerState.currentPage < allBookPages.lastIndex else activeChapterIndex < chapters.lastIndex,
                         icon = Icons.AutoMirrored.Rounded.ArrowForward,
                         contentDescription = if (isPaginated) "Next Page" else "Next Chapter",
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -722,7 +916,7 @@ fun ReaderScreen(
                     contentPadding = PaddingValues(vertical = 12.dp)
                 ) {
                     itemsIndexed(chapters) { index, ch ->
-                        val isSelected = index == currentChapterIndex
+                        val isSelected = index == activeChapterIndex
                         SettingsItemContainer(
                             index = index,
                             total = chapters.size,
@@ -807,7 +1001,7 @@ private fun ChapterElementItem(
                 text = element.text,
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontSize = fontSizePx.sp,
-                    lineHeight = (fontSizePx * 1.6f).sp,
+                    lineHeight = (fontSizePx * 1.45f).sp,
                     fontFamily = fontFamily
                 ),
                 color = textColor
@@ -1019,110 +1213,177 @@ object NativeChapterParser {
     fun paginate(
         elements: List<ChapterElement>,
         fontSizePx: Int,
-        screenWidthDp: Int,
-        screenHeightDp: Int
+        fontFamilyName: String,
+        fontScale: Float,
+        contentWidthDp: Int,
+        contentHeightDp: Int
     ): List<ChapterPage> {
         if (elements.isEmpty()) return listOf(ChapterPage(emptyList()))
 
-        val availableHeightDp = (screenHeightDp - 176).coerceAtLeast(300)
-        val availableWidthDp = (screenWidthDp - 48).coerceAtLeast(200)
+        val availableHeightDp = contentHeightDp.coerceAtLeast(300).toFloat()
+        val availableWidthDp = contentWidthDp.coerceAtLeast(200).toFloat()
 
-        val lineHeightDp = fontSizePx * 1.6f
-        val maxLinesPerPage = (availableHeightDp / lineHeightDp).toInt().coerceAtLeast(10)
-        val charsPerLine = (availableWidthDp / (fontSizePx * 0.55f)).toInt().coerceAtLeast(20)
+        val effectiveFontSize = fontSizePx * fontScale
+        val lineHeightDp = effectiveFontSize * 1.45f
+        val maxLinesPerPage = availableHeightDp / lineHeightDp
+
+        val charWidthFactor = when {
+            fontFamilyName.equals("Monospace", ignoreCase = true) || fontFamilyName.equals("Mono", ignoreCase = true) -> 0.60f
+            fontFamilyName.equals("Serif", ignoreCase = true) -> 0.50f
+            else -> 0.48f
+        }
+        val charsPerLine = (availableWidthDp / (effectiveFontSize * charWidthFactor)).toInt().coerceAtLeast(20)
+        val paragraphSpacingInLines = 8f / lineHeightDp
 
         val pages = mutableListOf<ChapterPage>()
         var currentPageElements = mutableListOf<ChapterElement>()
-        var currentLinesOnPage = 0
+        var currentLinesOnPage = 0f
+
+        fun commitPage() {
+            if (currentPageElements.isNotEmpty()) {
+                pages.add(ChapterPage(currentPageElements))
+                currentPageElements = mutableListOf()
+                currentLinesOnPage = 0f
+            }
+        }
 
         for (element in elements) {
             when (element) {
                 is ChapterElement.Heading -> {
-                    val headingLines = kotlin.math.ceil(element.text.length.toFloat() / (charsPerLine * 0.75f)).toInt() + 2
-                    if (currentLinesOnPage + headingLines > maxLinesPerPage && currentPageElements.isNotEmpty()) {
-                        pages.add(ChapterPage(currentPageElements))
-                        currentPageElements = mutableListOf()
-                        currentLinesOnPage = 0
+                    val headingScale = when (element.level) {
+                        1 -> 1.55f
+                        2 -> 1.30f
+                        else -> 1.15f
+                    }
+                    val headingCharsPerLine = (charsPerLine / headingScale).toInt().coerceAtLeast(15)
+                    val rawLines = estimateLines(element.text.text, headingCharsPerLine)
+                    val extraSpacingLines = if (element.level == 1) 16f / lineHeightDp else 10f / lineHeightDp
+                    val headingLines = (rawLines * headingScale) + extraSpacingLines
+
+                    if (currentLinesOnPage > 0f && currentLinesOnPage + headingLines > maxLinesPerPage) {
+                        commitPage()
+                    }
+                    if (currentPageElements.isNotEmpty()) {
+                        currentLinesOnPage += paragraphSpacingInLines
                     }
                     currentPageElements.add(element)
                     currentLinesOnPage += headingLines
                 }
                 is ChapterElement.Image -> {
-                    val lines = (maxLinesPerPage / 2).coerceAtLeast(6)
-                    if (currentLinesOnPage + lines > maxLinesPerPage && currentPageElements.isNotEmpty()) {
-                        pages.add(ChapterPage(currentPageElements))
-                        currentPageElements = mutableListOf()
-                        currentLinesOnPage = 0
+                    val imgLines = (availableHeightDp * 0.45f / lineHeightDp).coerceAtLeast(6f)
+                    if (currentLinesOnPage > 0f && currentLinesOnPage + imgLines > maxLinesPerPage) {
+                        commitPage()
+                    }
+                    if (currentPageElements.isNotEmpty()) {
+                        currentLinesOnPage += paragraphSpacingInLines
                     }
                     currentPageElements.add(element)
-                    currentLinesOnPage += lines
+                    currentLinesOnPage += imgLines
                 }
                 is ChapterElement.Paragraph -> {
-                    val textLength = element.text.length
-                    val paragraphLines = kotlin.math.ceil(textLength.toFloat() / charsPerLine.toFloat()).toInt() + 1
+                    val fullAnnotated = element.text
+                    val rawText = fullAnnotated.text
+                    var remainingStart = 0
 
-                    if (currentLinesOnPage + paragraphLines <= maxLinesPerPage) {
-                        currentPageElements.add(element)
-                        currentLinesOnPage += paragraphLines
-                    } else if (paragraphLines <= maxLinesPerPage) {
-                        if (currentPageElements.isNotEmpty()) {
-                            pages.add(ChapterPage(currentPageElements))
-                            currentPageElements = mutableListOf()
-                            currentLinesOnPage = 0
+                    while (remainingStart < rawText.length) {
+                        while (remainingStart < rawText.length && rawText[remainingStart].isWhitespace()) {
+                            remainingStart++
                         }
-                        currentPageElements.add(element)
-                        currentLinesOnPage += paragraphLines
-                    } else {
-                        // Split long paragraph while PRESERVING AnnotatedString spans
-                        val fullAnnotated = element.text
-                        val rawText = fullAnnotated.text
-                        var remainingStart = 0
+                        if (remainingStart >= rawText.length) break
 
-                        while (remainingStart < rawText.length) {
-                            val availableLines = (maxLinesPerPage - currentLinesOnPage).coerceAtLeast(4)
-                            val chunkChars = (availableLines * charsPerLine).coerceAtMost(rawText.length - remainingStart)
+                        val spacingCost = if (currentPageElements.isNotEmpty()) paragraphSpacingInLines else 0f
+                        val availableLines = maxLinesPerPage - (currentLinesOnPage + spacingCost)
 
-                            var cutPoint = remainingStart + chunkChars
-                            if (cutPoint < rawText.length) {
-                                val periodIdx = rawText.lastIndexOf('.', cutPoint)
-                                val spaceIdx = rawText.lastIndexOf(' ', cutPoint)
-                                cutPoint = when {
-                                    periodIdx > remainingStart + (chunkChars / 2) -> periodIdx + 1
-                                    spaceIdx > remainingStart + (chunkChars / 2) -> spaceIdx + 1
-                                    else -> cutPoint
+                        if (availableLines < 1.5f && currentPageElements.isNotEmpty()) {
+                            commitPage()
+                            continue
+                        }
+
+                        val linesCanFit = if (currentPageElements.isEmpty()) maxLinesPerPage else availableLines
+                        val maxCharsForRemaining = (linesCanFit * charsPerLine).toInt().coerceAtLeast(charsPerLine)
+
+                        val remainingLen = rawText.length - remainingStart
+                        if (remainingLen <= maxCharsForRemaining) {
+                            var subEnd = rawText.length
+                            while (subEnd > remainingStart && rawText[subEnd - 1].isWhitespace()) {
+                                subEnd--
+                            }
+                            if (subEnd > remainingStart) {
+                                if (currentPageElements.isNotEmpty()) {
+                                    currentLinesOnPage += paragraphSpacingInLines
                                 }
+                                currentPageElements.add(ChapterElement.Paragraph(fullAnnotated.subSequence(remainingStart, subEnd)))
+                                val addedLines = estimateLines(rawText.substring(remainingStart, subEnd), charsPerLine)
+                                currentLinesOnPage += addedLines
                             }
-
-                            // Trim range bounds so we can use AnnotatedString.subSequence() directly
-                            var subStart = remainingStart
+                            remainingStart = rawText.length
+                        } else {
+                            val cutPoint = findBestCutPoint(rawText, remainingStart, maxCharsForRemaining)
                             var subEnd = cutPoint
-                            while (subStart < subEnd && rawText[subStart].isWhitespace()) subStart++
-                            while (subEnd > subStart && rawText[subEnd - 1].isWhitespace()) subEnd--
-
-                            if (subStart < subEnd) {
-                                val chunkAnnotated = fullAnnotated.subSequence(subStart, subEnd)
-                                currentPageElements.add(ChapterElement.Paragraph(chunkAnnotated))
+                            while (subEnd > remainingStart && rawText[subEnd - 1].isWhitespace()) {
+                                subEnd--
                             }
+
+                            if (subEnd > remainingStart) {
+                                if (currentPageElements.isNotEmpty()) {
+                                    currentLinesOnPage += paragraphSpacingInLines
+                                }
+                                currentPageElements.add(ChapterElement.Paragraph(fullAnnotated.subSequence(remainingStart, subEnd)))
+                            }
+
+                            commitPage()
                             remainingStart = cutPoint
-
-                            if (remainingStart < rawText.length) {
-                                pages.add(ChapterPage(currentPageElements))
-                                currentPageElements = mutableListOf()
-                                currentLinesOnPage = 0
-                            } else {
-                                val addedLen = (subEnd - subStart).coerceAtLeast(0)
-                                currentLinesOnPage += kotlin.math.ceil(addedLen.toFloat() / charsPerLine.toFloat()).toInt() + 1
-                            }
                         }
                     }
                 }
             }
         }
 
-        if (currentPageElements.isNotEmpty()) {
-            pages.add(ChapterPage(currentPageElements))
+        commitPage()
+        return if (pages.isEmpty()) listOf(ChapterPage(emptyList())) else pages
+    }
+
+    private fun estimateLines(text: String, charsPerLine: Int): Float {
+        if (text.isEmpty()) return 0f
+        val cpl = charsPerLine.coerceAtLeast(1)
+        val lines = text.split('\n')
+        var totalLines = 0f
+        for (line in lines) {
+            val lineLen = line.length
+            totalLines += if (lineLen == 0) 1f else kotlin.math.ceil(lineLen.toFloat() / cpl.toFloat()).coerceAtLeast(1f)
+        }
+        return totalLines
+    }
+
+    private fun findBestCutPoint(text: String, start: Int, maxChars: Int): Int {
+        val endTarget = (start + maxChars).coerceAtMost(text.length)
+        if (endTarget >= text.length) return text.length
+
+        val minCut = start + (maxChars * 0.65f).toInt()
+
+        // 1. Prefer sentence boundary (.!?)
+        for (i in endTarget downTo minCut) {
+            val c = text[i]
+            if ((c == '.' || c == '!' || c == '?') && (i + 1 == text.length || text[i + 1].isWhitespace())) {
+                return i + 1
+            }
         }
 
-        return if (pages.isEmpty()) listOf(ChapterPage(emptyList())) else pages
+        // 2. Prefer clause boundary (,;:)
+        for (i in endTarget downTo minCut) {
+            val c = text[i]
+            if ((c == ',' || c == ';' || c == ':') && (i + 1 == text.length || text[i + 1].isWhitespace())) {
+                return i + 1
+            }
+        }
+
+        // 3. Fallback to any word boundary (space)
+        for (i in endTarget downTo start + 1) {
+            if (text[i].isWhitespace()) {
+                return i + 1
+            }
+        }
+
+        return endTarget
     }
 }
