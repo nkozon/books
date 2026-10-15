@@ -1,21 +1,29 @@
 package com.ozon.books.ui.reader
 
+import android.app.Activity
+import android.content.Context
+import android.graphics.Typeface
+import android.os.Build
+import android.text.Layout
 import android.text.Spanned
+import android.text.StaticLayout
+import android.text.TextPaint
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,8 +31,10 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -44,24 +54,30 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.FormatAlignLeft
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.FormatAlignJustify
 import androidx.compose.material.icons.rounded.FormatListNumbered
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.TextDecrease
-import androidx.compose.material.icons.rounded.TextIncrease
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -74,44 +90,48 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.text.HtmlCompat
+import androidx.core.view.WindowCompat
 import com.ozon.books.data.BookRepository
 import com.ozon.books.data.PreferencesManager
 import com.ozon.books.model.Book
 import com.ozon.books.model.Chapter
 import com.ozon.books.ui.components.CircleIconButton
-import com.ozon.books.ui.components.SettingsItemContainer
 import com.ozon.books.ui.theme.LocalThemeIsDark
 import com.ozon.books.ui.theme.LocalThemeIsOled
+import java.io.File
+import java.net.URLDecoder
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.net.URLDecoder
 
 sealed class ChapterElement {
     data class Paragraph(val text: AnnotatedString) : ChapterElement()
@@ -128,6 +148,23 @@ data class BookPage(
     val elements: List<ChapterElement>
 )
 
+enum class ReaderBgTheme(val id: String, val label: String) {
+    SYSTEM("system", "Auto"),
+    WHITE("white", "White"),
+    SEPIA("sepia", "Sepia"),
+    DARK("dark", "Black");
+
+    companion object {
+        fun fromId(id: String): ReaderBgTheme = entries.firstOrNull { it.id == id } ?: SYSTEM
+    }
+}
+
+// Pre-allocated static shapes for fast TOC rendering without per-item animation overhead
+private val TocSingleShape = RoundedCornerShape(16.dp)
+private val TocTopShape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 4.dp, bottomEnd = 4.dp)
+private val TocBottomShape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
+private val TocMiddleShape = RoundedCornerShape(4.dp)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderScreen(
@@ -135,27 +172,65 @@ fun ReaderScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val repository = remember { BookRepository.getInstance(context) }
     val preferencesManager = remember { PreferencesManager.getInstance(context) }
+    val readerPrefs = remember { context.getSharedPreferences("reader_extra_prefs", Context.MODE_PRIVATE) }
+
     val isDark = LocalThemeIsDark.current
     val isOled = LocalThemeIsOled.current
     val fontFamily by preferencesManager.fontFamily.collectAsState()
     val savedFontSize by preferencesManager.fontSizePx.collectAsState()
+    val lineHeightMultiplier by preferencesManager.lineHeightMultiplier.collectAsState()
+    val isJustified by preferencesManager.isJustified.collectAsState()
     val isPaginated by preferencesManager.isPaginated.collectAsState()
+
+    var readerBgTheme by remember {
+        mutableStateOf(
+            ReaderBgTheme.fromId(readerPrefs.getString("reader_bg_theme", ReaderBgTheme.SYSTEM.id) ?: ReaderBgTheme.SYSTEM.id)
+        )
+    }
+
+    fun updateReaderBgTheme(theme: ReaderBgTheme) {
+        readerBgTheme = theme
+        readerPrefs.edit().putString("reader_bg_theme", theme.id).apply()
+    }
+
+    // Determine whether the active reader background is light (White or Sepia) or dark (Black)
+    val isLightReaderBg = when (readerBgTheme) {
+        ReaderBgTheme.WHITE, ReaderBgTheme.SEPIA -> true
+        ReaderBgTheme.DARK -> false
+        ReaderBgTheme.SYSTEM -> !isDark
+    }
+
+    // Dynamically update status bar & navigation bar icon colors (black icons on White/Sepia, white icons on Black)
+    DisposableEffect(isLightReaderBg, isDark) {
+        val window = (context as? Activity)?.window
+        val insetsController = window?.let { WindowCompat.getInsetsController(it, view) }
+        insetsController?.isAppearanceLightStatusBars = isLightReaderBg
+        insetsController?.isAppearanceLightNavigationBars = isLightReaderBg
+
+        onDispose {
+            insetsController?.isAppearanceLightStatusBars = !isDark
+            insetsController?.isAppearanceLightNavigationBars = !isDark
+        }
+    }
+
     val coroutineScope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
+    val densityScale = density.density
     val fontScale = density.fontScale
 
     val topStatusPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottomNavPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
-    // Page text fills the screen from just below the status bar to above the nav bar / counter
-    val pageTopPadding = topStatusPadding + 4.dp
+    // Page text starts consistently below the status bar and stops above the bottom counter
+    val pageTopPadding = topStatusPadding + 12.dp
     val pageBottomPadding = bottomNavPadding + 22.dp
-    val pageHorizontalPadding = 16.dp
+    val pageHorizontalPadding = 24.dp
 
-    var contentWidthDp by remember { mutableIntStateOf((configuration.screenWidthDp - 32).coerceAtLeast(200)) }
+    var contentWidthDp by remember { mutableIntStateOf((configuration.screenWidthDp - 48).coerceAtLeast(200)) }
     var contentHeightDp by remember { mutableIntStateOf((configuration.screenHeightDp - 60).coerceAtLeast(300)) }
 
     var book by remember { mutableStateOf<Book?>(null) }
@@ -190,7 +265,7 @@ fun ReaderScreen(
     }
 
     // Parse and paginate all chapters into a unified page list across the entire book
-    LaunchedEffect(chapters, fontSizePx, fontFamily, fontScale, contentWidthDp, contentHeightDp) {
+    LaunchedEffect(chapters, fontSizePx, lineHeightMultiplier, fontFamily, fontScale, densityScale, contentWidthDp, contentHeightDp) {
         if (chapters.isEmpty()) return@LaunchedEffect
         val pagesList = withContext(Dispatchers.IO) {
             for (ch in chapters) {
@@ -210,7 +285,9 @@ fun ReaderScreen(
                 val chPages = NativeChapterParser.paginate(
                     elements = elems,
                     fontSizePx = fontSizePx,
+                    lineHeightMultiplier = lineHeightMultiplier,
                     fontFamilyName = fontFamily,
+                    density = densityScale,
                     fontScale = fontScale,
                     contentWidthDp = contentWidthDp,
                     contentHeightDp = contentHeightDp
@@ -377,12 +454,45 @@ fun ReaderScreen(
         else -> FontFamily.SansSerif
     }
 
-    val backgroundColor = if (isDark) {
-        if (isOled) Color.Black else Color(0xFF141218)
+    // Dynamic Auto background: uses MaterialTheme.colorScheme.background darkened slightly to minimize eye strain
+    val dynamicAutoBgColor = if (isDark) {
+        if (isOled) Color.Black else lerp(MaterialTheme.colorScheme.background, Color.Black, 0.22f)
     } else {
-        Color(0xFFFEF7FF)
+        lerp(MaterialTheme.colorScheme.background, Color.Black, 0.06f)
     }
-    val textColor = if (isDark) Color(0xFFE6E0E9) else Color(0xFF1D1B20)
+
+    val dynamicAutoTextColor = if (isDark) {
+        lerp(MaterialTheme.colorScheme.onBackground, Color.Black, 0.08f)
+    } else {
+        MaterialTheme.colorScheme.onBackground
+    }
+
+    val backgroundColor = when (readerBgTheme) {
+        ReaderBgTheme.WHITE -> Color(0xFFFFFFFF)
+        ReaderBgTheme.SEPIA -> Color(0xFFF4ECD8)
+        ReaderBgTheme.DARK -> Color(0xFF000000)
+        ReaderBgTheme.SYSTEM -> dynamicAutoBgColor
+    }
+
+    val textColor = when (readerBgTheme) {
+        ReaderBgTheme.WHITE -> Color(0xFF1D1B20)
+        ReaderBgTheme.SEPIA -> Color(0xFF3E3224)
+        ReaderBgTheme.DARK -> Color(0xFFE6E0E9)
+        ReaderBgTheme.SYSTEM -> dynamicAutoTextColor
+    }
+
+    val controlSurfaceColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.90f)
+    val controlContentColor = MaterialTheme.colorScheme.onSurface
+
+    val overallBookProgress = if (isPaginated) {
+        if (allBookPages.size > 1) {
+            (pagerState.currentPage.toFloat() / (allBookPages.size - 1).toFloat()).coerceIn(0f, 1f)
+        } else 1f
+    } else {
+        if (chapters.isNotEmpty()) {
+            ((activeChapterIndex + 1).toFloat() / chapters.size.toFloat()).coerceIn(0f, 1f)
+        } else 0f
+    }
 
     BoxWithConstraints(
         modifier = Modifier
@@ -454,7 +564,8 @@ fun ReaderScreen(
             ) {
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.Top
                 ) { pageIndex ->
                     val page = allBookPages.getOrNull(pageIndex)
                     if (page != null) {
@@ -463,12 +574,16 @@ fun ReaderScreen(
                                 .fillMaxSize()
                                 .padding(horizontal = pageHorizontalPadding)
                                 .padding(top = pageTopPadding, bottom = pageBottomPadding),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            // Alignment.Top guarantees the first line of every page starts at the exact same height
+                            verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Top),
+                            horizontalAlignment = Alignment.Start
                         ) {
                             page.elements.forEach { element ->
                                 ChapterElementItem(
                                     element = element,
                                     fontSizePx = fontSizePx,
+                                    lineHeightMultiplier = lineHeightMultiplier,
+                                    isJustified = isJustified,
                                     fontFamily = resolvedFontFamily,
                                     textColor = textColor
                                 )
@@ -482,7 +597,7 @@ fun ReaderScreen(
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = bottomNavPadding + 4.dp)
+                            .padding(bottom = bottomNavPadding + 2.dp)
                     ) {
                         Text(
                             text = "${(currentPage?.pageIndexInChapter ?: 0) + 1} / ${currentPage?.totalPagesInChapter ?: 1}",
@@ -553,6 +668,7 @@ fun ReaderScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.Start,
                     contentPadding = PaddingValues(
                         start = pageHorizontalPadding,
                         end = pageHorizontalPadding,
@@ -565,6 +681,8 @@ fun ReaderScreen(
                         ChapterElementItem(
                             element = element,
                             fontSizePx = fontSizePx,
+                            lineHeightMultiplier = lineHeightMultiplier,
+                            isJustified = isJustified,
                             fontFamily = resolvedFontFamily,
                             textColor = textColor
                         )
@@ -573,219 +691,314 @@ fun ReaderScreen(
             }
         }
 
-        // Top App Bar Overlay
+        // Top App Bar Overlay with smooth gradient fading into the book background color
         AnimatedVisibility(
             visible = showControls,
             enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
             modifier = Modifier.align(Alignment.TopCenter)
         ) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.95f),
-                shadowElevation = 4.dp
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        brush = Brush.verticalGradient(
+                            0.0f to backgroundColor,
+                            0.62f to backgroundColor.copy(alpha = 0.92f),
+                            0.85f to backgroundColor.copy(alpha = 0.55f),
+                            1.0f to backgroundColor.copy(alpha = 0f)
+                        )
+                    )
+                    .padding(bottom = 24.dp)
             ) {
                 TopAppBar(
                     title = {
-                        Column {
+                        Column(modifier = Modifier.padding(horizontal = 4.dp)) {
                             Text(
                                 text = book!!.title,
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = textColor,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = currentChapter?.title ?: "Chapter ${activeChapterIndex + 1}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = textColor.copy(alpha = 0.72f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
                     },
                     navigationIcon = {
-                        Box(modifier = Modifier.padding(start = 8.dp)) {
+                        Box(modifier = Modifier.padding(start = 12.dp)) {
                             CircleIconButton(
                                 onClick = onNavigateBack,
                                 icon = Icons.AutoMirrored.Rounded.ArrowBack,
                                 contentDescription = "Back",
-                                containerColor = Color.Transparent,
-                                contentColor = MaterialTheme.colorScheme.onSurface
+                                containerColor = controlSurfaceColor,
+                                contentColor = controlContentColor
                             )
                         }
                     },
                     actions = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.padding(end = 8.dp)
+                        // Pill-shaped background surface grouping Table of Contents + Settings buttons
+                        Surface(
+                            shape = CircleShape,
+                            color = controlSurfaceColor,
+                            modifier = Modifier.padding(end = 12.dp)
                         ) {
-                            CircleIconButton(
-                                onClick = { showTocSheet = true },
-                                icon = Icons.Rounded.FormatListNumbered,
-                                contentDescription = "Table of Contents",
-                                containerColor = Color.Transparent,
-                                contentColor = MaterialTheme.colorScheme.onSurface
-                            )
-
-                            // Settings Button with Anchored Top-Right Popup Menu
-                            Box {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                modifier = Modifier.padding(horizontal = 2.dp)
+                            ) {
                                 CircleIconButton(
-                                    onClick = { showSettingsPopup = true },
-                                    icon = Icons.Rounded.Settings,
-                                    contentDescription = "Reader Settings",
+                                    onClick = { showTocSheet = true },
+                                    icon = Icons.Rounded.FormatListNumbered,
+                                    contentDescription = "Table of Contents",
                                     containerColor = Color.Transparent,
-                                    contentColor = MaterialTheme.colorScheme.onSurface
+                                    contentColor = controlContentColor
                                 )
 
-                                DropdownMenu(
-                                    expanded = showSettingsPopup,
-                                    onDismissRequest = { showSettingsPopup = false },
-                                    shape = RoundedCornerShape(20.dp),
-                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                    modifier = Modifier.width(280.dp)
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(16.dp),
-                                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                                // Settings Button with Anchored Top-Right Popup Menu
+                                Box {
+                                    CircleIconButton(
+                                        onClick = { showSettingsPopup = true },
+                                        icon = Icons.Rounded.Settings,
+                                        contentDescription = "Reader Settings",
+                                        containerColor = Color.Transparent,
+                                        contentColor = controlContentColor
+                                    )
+
+                                    DropdownMenu(
+                                        expanded = showSettingsPopup,
+                                        onDismissRequest = { showSettingsPopup = false },
+                                        shape = RoundedCornerShape(24.dp),
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        modifier = Modifier.width(320.dp)
                                     ) {
-                                        Text(
-                                            text = "Reader Settings",
-                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-
-                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                                        // 1. Reading Mode
-                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                                        ) {
                                             Text(
-                                                text = "Layout",
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                fontWeight = FontWeight.SemiBold
+                                                text = "Reader Settings",
+                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurface
                                             )
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                Surface(
-                                                    onClick = { preferencesManager.setIsPaginated(true) },
-                                                    shape = RoundedCornerShape(10.dp),
-                                                    color = if (isPaginated) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerLow,
-                                                    contentColor = if (isPaginated) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Box(modifier = Modifier.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                                                        Text(text = "Pages", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
-                                                    }
-                                                }
 
-                                                Surface(
-                                                    onClick = { preferencesManager.setIsPaginated(false) },
-                                                    shape = RoundedCornerShape(10.dp),
-                                                    color = if (!isPaginated) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerLow,
-                                                    contentColor = if (!isPaginated) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                                    modifier = Modifier.weight(1f)
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                                            // 1. Reading Mode (Pages / Scroll)
+                                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Text(
+                                                    text = "Layout",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
-                                                    Box(modifier = Modifier.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                                                        Text(text = "Scroll", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
-                                                    }
+                                                    DynamicSegmentedButton(
+                                                        text = "Pages",
+                                                        isSelected = isPaginated,
+                                                        index = 0,
+                                                        count = 2,
+                                                        onClick = { preferencesManager.setIsPaginated(true) },
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    DynamicSegmentedButton(
+                                                        text = "Scroll",
+                                                        isSelected = !isPaginated,
+                                                        index = 1,
+                                                        count = 2,
+                                                        onClick = { preferencesManager.setIsPaginated(false) },
+                                                        modifier = Modifier.weight(1f)
+                                                    )
                                                 }
                                             }
-                                        }
 
-                                        // 2. Font Size
-                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            Text(
-                                                text = "Font Size",
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
+                                            // 2. Background Theme (Auto / White / Sepia / Black)
+                                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Text(
+                                                    text = "Background",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    ReaderThemeSwatch(
+                                                        label = "Auto",
+                                                        swatchColor = dynamicAutoBgColor,
+                                                        contentColor = dynamicAutoTextColor,
+                                                        isSelected = readerBgTheme == ReaderBgTheme.SYSTEM,
+                                                        onClick = { updateReaderBgTheme(ReaderBgTheme.SYSTEM) },
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    ReaderThemeSwatch(
+                                                        label = "White",
+                                                        swatchColor = Color(0xFFFFFFFF),
+                                                        contentColor = Color(0xFF1D1B20),
+                                                        isSelected = readerBgTheme == ReaderBgTheme.WHITE,
+                                                        onClick = { updateReaderBgTheme(ReaderBgTheme.WHITE) },
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    ReaderThemeSwatch(
+                                                        label = "Sepia",
+                                                        swatchColor = Color(0xFFF4ECD8),
+                                                        contentColor = Color(0xFF3E3224),
+                                                        isSelected = readerBgTheme == ReaderBgTheme.SEPIA,
+                                                        onClick = { updateReaderBgTheme(ReaderBgTheme.SEPIA) },
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    ReaderThemeSwatch(
+                                                        label = "Black",
+                                                        swatchColor = Color(0xFF000000),
+                                                        contentColor = Color(0xFFE6E0E9),
+                                                        isSelected = readerBgTheme == ReaderBgTheme.DARK,
+                                                        onClick = { updateReaderBgTheme(ReaderBgTheme.DARK) },
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                }
+                                            }
+
+                                            // 3. Font Size & Line Height Side-by-Side
                                             Row(
                                                 modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                                             ) {
-                                                CircleIconButton(
-                                                    onClick = {
-                                                        fontSizePx = (fontSizePx - 1).coerceAtLeast(10)
-                                                        preferencesManager.setFontSizePx(fontSizePx)
-                                                    },
-                                                    enabled = fontSizePx > 10,
-                                                    icon = Icons.Rounded.TextDecrease,
-                                                    contentDescription = "Decrease",
-                                                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                                                    contentColor = MaterialTheme.colorScheme.onSurface,
-                                                    modifier = Modifier.size(36.dp),
-                                                    iconSize = 18.dp
-                                                )
-
-                                                Surface(
-                                                    shape = CircleShape,
-                                                    color = MaterialTheme.colorScheme.primaryContainer
+                                                // Font Size
+                                                Column(
+                                                    modifier = Modifier.weight(1f),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
                                                     Text(
-                                                        text = "$fontSizePx px",
-                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                                        text = "Font Size",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                    DynamicStepper(
+                                                        valueText = "$fontSizePx px",
+                                                        onDecrease = {
+                                                            fontSizePx = (fontSizePx - 1).coerceAtLeast(10)
+                                                            preferencesManager.setFontSizePx(fontSizePx)
+                                                        },
+                                                        onIncrease = {
+                                                            fontSizePx = (fontSizePx + 1).coerceAtMost(22)
+                                                            preferencesManager.setFontSizePx(fontSizePx)
+                                                        },
+                                                        canDecrease = fontSizePx > 10,
+                                                        canIncrease = fontSizePx < 22
                                                     )
                                                 }
 
-                                                CircleIconButton(
-                                                    onClick = {
-                                                        fontSizePx = (fontSizePx + 1).coerceAtMost(22)
-                                                        preferencesManager.setFontSizePx(fontSizePx)
-                                                    },
-                                                    enabled = fontSizePx < 22,
-                                                    icon = Icons.Rounded.TextIncrease,
-                                                    contentDescription = "Increase",
-                                                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                                                    contentColor = MaterialTheme.colorScheme.onSurface,
-                                                    modifier = Modifier.size(36.dp),
-                                                    iconSize = 18.dp
-                                                )
+                                                // Line Height
+                                                Column(
+                                                    modifier = Modifier.weight(1f),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "Line Height",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                    DynamicStepper(
+                                                        valueText = String.format(Locale.US, "%.1fx", lineHeightMultiplier),
+                                                        onDecrease = {
+                                                            preferencesManager.setLineHeightMultiplier(lineHeightMultiplier - 0.1f)
+                                                        },
+                                                        onIncrease = {
+                                                            preferencesManager.setLineHeightMultiplier(lineHeightMultiplier + 0.1f)
+                                                        },
+                                                        canDecrease = lineHeightMultiplier > 1.25f,
+                                                        canIncrease = lineHeightMultiplier < 1.95f
+                                                    )
+                                                }
                                             }
-                                        }
 
-                                        // 3. Typeface
-                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            Text(
-                                                text = "Typeface",
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
+                                            // 4. Justify Text Toggle
                                             Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clip(RoundedCornerShape(16.dp))
+                                                    .clickable { preferencesManager.setIsJustified(!isJustified) }
+                                                    .background(
+                                                        if (isJustified) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                                        else MaterialTheme.colorScheme.surfaceContainerLow
+                                                    )
+                                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                listOf("Serif", "Sans", "Mono").forEach { familyName ->
-                                                    val target = when (familyName) {
-                                                        "Sans" -> "Sans-Serif"
-                                                        "Mono" -> "Monospace"
-                                                        else -> "Serif"
-                                                    }
-                                                    val isSelected = fontFamily.equals(target, ignoreCase = true) ||
-                                                            (target == "Sans-Serif" && fontFamily.equals("Sans", ignoreCase = true))
-                                                    Surface(
-                                                        onClick = { preferencesManager.setFontFamily(target) },
-                                                        shape = RoundedCornerShape(10.dp),
-                                                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-                                                        border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
-                                                        modifier = Modifier.weight(1f)
-                                                    ) {
-                                                        Box(modifier = Modifier.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                                                            Text(
-                                                                text = familyName,
-                                                                style = MaterialTheme.typography.labelSmall.copy(
-                                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                                                ),
-                                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = if (isJustified) Icons.Rounded.FormatAlignJustify else Icons.AutoMirrored.Rounded.FormatAlignLeft,
+                                                        contentDescription = null,
+                                                        tint = if (isJustified) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                    Text(
+                                                        text = "Justify text",
+                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                                Switch(
+                                                    checked = isJustified,
+                                                    onCheckedChange = { preferencesManager.setIsJustified(it) },
+                                                    thumbContent = if (isJustified) {
+                                                        {
+                                                            Icon(
+                                                                imageVector = Icons.Rounded.Check,
+                                                                contentDescription = null,
+                                                                modifier = Modifier.size(SwitchDefaults.IconSize)
                                                             )
                                                         }
+                                                    } else null
+                                                )
+                                            }
+
+                                            // 5. Typeface
+                                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Text(
+                                                    text = "Typeface",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    val families = listOf("Serif", "Sans", "Mono")
+                                                    families.forEachIndexed { idx, familyName ->
+                                                        val target = when (familyName) {
+                                                            "Sans" -> "Sans-Serif"
+                                                            "Mono" -> "Monospace"
+                                                            else -> "Serif"
+                                                        }
+                                                        val isSelected = fontFamily.equals(target, ignoreCase = true) ||
+                                                                (target == "Sans-Serif" && fontFamily.equals("Sans", ignoreCase = true))
+
+                                                        DynamicSegmentedButton(
+                                                            text = familyName,
+                                                            isSelected = isSelected,
+                                                            index = idx,
+                                                            count = families.size,
+                                                            onClick = { preferencesManager.setFontFamily(target) },
+                                                            modifier = Modifier.weight(1f)
+                                                        )
                                                     }
                                                 }
                                             }
@@ -802,25 +1015,33 @@ fun ReaderScreen(
             }
         }
 
-        // Bottom Controls Floating Pill from nkozon/notes
+        // Bottom Controls Overlay with smooth gradient fading into the book background color
         AnimatedVisibility(
             visible = showControls,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = bottomNavPadding + 16.dp, start = 16.dp, end = 16.dp)
+            modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.95f),
-                shadowElevation = 6.dp,
-                modifier = Modifier.fillMaxWidth()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        brush = Brush.verticalGradient(
+                            0.0f to backgroundColor.copy(alpha = 0f),
+                            0.18f to backgroundColor.copy(alpha = 0.55f),
+                            0.42f to backgroundColor.copy(alpha = 0.92f),
+                            1.0f to backgroundColor
+                        )
+                    )
+                    .padding(
+                        top = 24.dp,
+                        bottom = bottomNavPadding + 12.dp,
+                        start = 16.dp,
+                        end = 16.dp
+                    )
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -835,37 +1056,45 @@ fun ReaderScreen(
                         enabled = if (isPaginated) pagerState.currentPage > 0 else activeChapterIndex > 0,
                         icon = Icons.AutoMirrored.Rounded.ArrowBack,
                         contentDescription = if (isPaginated) "Previous Page" else "Previous Chapter",
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                        contentColor = MaterialTheme.colorScheme.onSurface
+                        containerColor = controlSurfaceColor,
+                        contentColor = controlContentColor
                     )
 
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (isPaginated) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        val chNum = activeChapterIndex + 1
+                        val statusLabel = if (isPaginated) {
                             val pageInCh = (currentPage?.pageIndexInChapter ?: 0) + 1
                             val totalInCh = currentPage?.totalPagesInChapter ?: 1
-                            val chNum = activeChapterIndex + 1
-                            Text(
-                                text = "Page $pageInCh of $totalInCh",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Chapter $chNum of ${chapters.size}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            "Chapter $chNum · Page $pageInCh of $totalInCh"
                         } else {
-                            Text(
-                                text = "Chapter ${activeChapterIndex + 1} of ${chapters.size}",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "${((activeChapterIndex + 1).toFloat() / chapters.size.coerceAtLeast(1) * 100).toInt()}% completed",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            val pct = (overallBookProgress * 100).toInt()
+                            "Chapter $chNum of ${chapters.size} · $pct%"
                         }
+
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = textColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        LinearProgressIndicator(
+                            progress = { overallBookProgress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(CircleShape),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = textColor.copy(alpha = 0.20f),
+                            strokeCap = StrokeCap.Round
+                        )
                     }
 
                     CircleIconButton(
@@ -879,25 +1108,31 @@ fun ReaderScreen(
                         enabled = if (isPaginated) pagerState.currentPage < allBookPages.lastIndex else activeChapterIndex < chapters.lastIndex,
                         icon = Icons.AutoMirrored.Rounded.ArrowForward,
                         contentDescription = if (isPaginated) "Next Page" else "Next Chapter",
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                        contentColor = MaterialTheme.colorScheme.onSurface
+                        containerColor = controlSurfaceColor,
+                        contentColor = controlContentColor
                     )
                 }
             }
         }
     }
 
-    // Table of contents Bottom Sheet
+    // Table of contents Bottom Sheet (Fast & Tall)
     if (showTocSheet) {
+        val tocSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val tocListState = rememberLazyListState(
+            initialFirstVisibleItemIndex = (activeChapterIndex - 2).coerceAtLeast(0)
+        )
+
         ModalBottomSheet(
             onDismissRequest = { showTocSheet = false },
-            sheetState = rememberModalBottomSheetState(),
+            sheetState = tocSheetState,
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .fillMaxHeight(0.82f)
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
@@ -909,21 +1144,38 @@ fun ReaderScreen(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
                 LazyColumn(
+                    state = tocListState,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(380.dp),
+                        .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                     contentPadding = PaddingValues(vertical = 12.dp)
                 ) {
-                    itemsIndexed(chapters) { index, ch ->
+                    val totalChapters = chapters.size
+                    itemsIndexed(
+                        items = chapters,
+                        key = { index, _ -> index }
+                    ) { index, ch ->
                         val isSelected = index == activeChapterIndex
-                        SettingsItemContainer(
-                            index = index,
-                            total = chapters.size,
+                        val itemShape = when {
+                            totalChapters == 1 -> TocSingleShape
+                            index == 0 -> TocTopShape
+                            index == totalChapters - 1 -> TocBottomShape
+                            else -> TocMiddleShape
+                        }
+
+                        Surface(
                             onClick = {
                                 changeChapter(index)
                                 showTocSheet = false
-                            }
+                            },
+                            shape = itemShape,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
                                 modifier = Modifier
@@ -949,6 +1201,7 @@ fun ReaderScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 if (isSelected) {
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Icon(
                                         imageVector = Icons.Rounded.Check,
                                         contentDescription = "Current chapter",
@@ -966,9 +1219,170 @@ fun ReaderScreen(
 }
 
 @Composable
+private fun ReaderThemeSwatch(
+    label: String,
+    swatchColor: Color,
+    contentColor: Color,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val borderColor = if (isSelected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+    }
+    val borderWidth = if (isSelected) 2.dp else 1.dp
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = swatchColor,
+        border = BorderStroke(borderWidth, borderColor),
+        modifier = modifier.height(42.dp)
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                ),
+                color = contentColor
+            )
+        }
+    }
+}
+
+@Composable
+private fun DynamicSegmentedButton(
+    text: String,
+    isSelected: Boolean,
+    index: Int,
+    count: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val outerRadius = 18.dp
+    val innerRadius = 6.dp
+    val selectedRadius = 16.dp
+
+    val topStart by animateDpAsState(
+        targetValue = if (isSelected) selectedRadius else if (index == 0) outerRadius else innerRadius,
+        label = "topStart"
+    )
+    val bottomStart by animateDpAsState(
+        targetValue = if (isSelected) selectedRadius else if (index == 0) outerRadius else innerRadius,
+        label = "bottomStart"
+    )
+    val topEnd by animateDpAsState(
+        targetValue = if (isSelected) selectedRadius else if (index == count - 1) outerRadius else innerRadius,
+        label = "topEnd"
+    )
+    val bottomEnd by animateDpAsState(
+        targetValue = if (isSelected) selectedRadius else if (index == count - 1) outerRadius else innerRadius,
+        label = "bottomEnd"
+    )
+
+    val shape = RoundedCornerShape(
+        topStart = topStart,
+        bottomStart = bottomStart,
+        topEnd = topEnd,
+        bottomEnd = bottomEnd
+    )
+
+    Surface(
+        onClick = onClick,
+        shape = shape,
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+        border = if (isSelected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier.padding(vertical = 10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                ),
+                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+}
+
+@Composable
+private fun DynamicStepper(
+    valueText: String,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit,
+    canDecrease: Boolean,
+    canIncrease: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            onClick = onDecrease,
+            enabled = canDecrease,
+            shape = RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp, topEnd = 6.dp, bottomEnd = 6.dp),
+            color = if (canDecrease) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow,
+            contentColor = if (canDecrease) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            modifier = Modifier.size(32.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Rounded.Remove,
+                    contentDescription = "Decrease",
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+
+        Text(
+            text = valueText,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.weight(1f)
+        )
+
+        Surface(
+            onClick = onIncrease,
+            enabled = canIncrease,
+            shape = RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp, topEnd = 12.dp, bottomEnd = 12.dp),
+            color = if (canIncrease) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow,
+            contentColor = if (canIncrease) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            modifier = Modifier.size(32.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = "Increase",
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ChapterElementItem(
     element: ChapterElement,
     fontSizePx: Int,
+    lineHeightMultiplier: Float,
+    isJustified: Boolean,
     fontFamily: FontFamily,
     textColor: Color
 ) {
@@ -983,28 +1397,46 @@ private fun ChapterElementItem(
 
             Text(
                 text = element.text,
-                style = MaterialTheme.typography.titleLarge.copy(
+                style = TextStyle(
                     fontSize = headingFontSize,
                     lineHeight = headingLineHeight,
+                    letterSpacing = 0.sp,
                     fontWeight = if (element.level <= 2) FontWeight.Bold else FontWeight.SemiBold,
-                    fontFamily = fontFamily
+                    fontFamily = fontFamily,
+                    color = textColor,
+                    textAlign = TextAlign.Center,
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    lineHeightStyle = LineHeightStyle(
+                        alignment = LineHeightStyle.Alignment.Center,
+                        trim = LineHeightStyle.Trim.None
+                    )
                 ),
-                color = textColor,
-                modifier = Modifier.padding(
-                    top = if (element.level == 1) 12.dp else 6.dp,
-                    bottom = 4.dp
-                )
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        top = if (element.level == 1) 12.dp else 6.dp,
+                        bottom = 4.dp
+                    )
             )
         }
         is ChapterElement.Paragraph -> {
             Text(
                 text = element.text,
-                style = MaterialTheme.typography.bodyLarge.copy(
+                modifier = Modifier.fillMaxWidth(),
+                style = TextStyle(
                     fontSize = fontSizePx.sp,
-                    lineHeight = (fontSizePx * 1.45f).sp,
-                    fontFamily = fontFamily
-                ),
-                color = textColor
+                    lineHeight = (fontSizePx * lineHeightMultiplier).sp,
+                    letterSpacing = 0.sp,
+                    fontWeight = FontWeight.Normal,
+                    fontFamily = fontFamily,
+                    color = textColor,
+                    textAlign = if (isJustified) TextAlign.Justify else TextAlign.Start,
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    lineHeightStyle = LineHeightStyle(
+                        alignment = LineHeightStyle.Alignment.Center,
+                        trim = LineHeightStyle.Trim.None
+                    )
+                )
             )
         }
         is ChapterElement.Image -> {
@@ -1169,11 +1601,11 @@ object NativeChapterParser {
                 when (span) {
                     is android.text.style.StyleSpan -> {
                         when (span.style) {
-                            android.graphics.Typeface.BOLD ->
+                            Typeface.BOLD ->
                                 builder.addStyle(SpanStyle(fontWeight = FontWeight.Bold), sStart, sEnd)
-                            android.graphics.Typeface.ITALIC ->
+                            Typeface.ITALIC ->
                                 builder.addStyle(SpanStyle(fontStyle = FontStyle.Italic), sStart, sEnd)
-                            android.graphics.Typeface.BOLD_ITALIC ->
+                            Typeface.BOLD_ITALIC ->
                                 builder.addStyle(SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic), sStart, sEnd)
                         }
                     }
@@ -1204,46 +1636,57 @@ object NativeChapterParser {
 
         val styleSpans = spanned.getSpans(start, end, android.text.style.StyleSpan::class.java)
         val isAllBold = styleSpans.any {
-            (it.style == android.graphics.Typeface.BOLD || it.style == android.graphics.Typeface.BOLD_ITALIC) &&
+            (it.style == Typeface.BOLD || it.style == Typeface.BOLD_ITALIC) &&
                     spanned.getSpanStart(it) <= start && spanned.getSpanEnd(it) >= end
         }
         return if (isAllBold && text.length < 70 && !text.endsWith(".")) 3 else null
     }
 
+    /**
+     * Paginates [elements] using Android's native [StaticLayout] with a safety buffer
+     * so that bottom lines never overlap or get cut off.
+     */
     fun paginate(
         elements: List<ChapterElement>,
         fontSizePx: Int,
+        lineHeightMultiplier: Float,
         fontFamilyName: String,
+        density: Float,
         fontScale: Float,
         contentWidthDp: Int,
         contentHeightDp: Int
     ): List<ChapterPage> {
         if (elements.isEmpty()) return listOf(ChapterPage(emptyList()))
 
-        val availableHeightDp = contentHeightDp.coerceAtLeast(300).toFloat()
-        val availableWidthDp = contentWidthDp.coerceAtLeast(200).toFloat()
+        // Subtract 16dp safety buffer so bottom lines never touch or overflow the screen boundary
+        val availableHeightPx = ((contentHeightDp - 16).coerceAtLeast(280) * density)
+        val availableWidthPx = (contentWidthDp.coerceAtLeast(200) * density).toInt().coerceAtLeast(100)
 
-        val effectiveFontSize = fontSizePx * fontScale
-        val lineHeightDp = effectiveFontSize * 1.45f
-        val maxLinesPerPage = availableHeightDp / lineHeightDp
+        val bodyTextSizePx = fontSizePx * density * fontScale
+        val bodyLineHeightPx = bodyTextSizePx * lineHeightMultiplier
+        val paragraphSpacingPx = 8f * density
 
-        val charWidthFactor = when {
-            fontFamilyName.equals("Monospace", ignoreCase = true) || fontFamilyName.equals("Mono", ignoreCase = true) -> 0.60f
-            fontFamilyName.equals("Serif", ignoreCase = true) -> 0.50f
-            else -> 0.48f
+        val baseTypeface = when {
+            fontFamilyName.equals("Monospace", ignoreCase = true) || fontFamilyName.equals("Mono", ignoreCase = true) -> Typeface.MONOSPACE
+            fontFamilyName.equals("Serif", ignoreCase = true) -> Typeface.SERIF
+            else -> Typeface.SANS_SERIF
         }
-        val charsPerLine = (availableWidthDp / (effectiveFontSize * charWidthFactor)).toInt().coerceAtLeast(20)
-        val paragraphSpacingInLines = 8f / lineHeightDp
+
+        val bodyPaint = TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = bodyTextSizePx
+            typeface = baseTypeface
+            letterSpacing = 0f
+        }
 
         val pages = mutableListOf<ChapterPage>()
         var currentPageElements = mutableListOf<ChapterElement>()
-        var currentLinesOnPage = 0f
+        var currentHeightPx = 0f
 
         fun commitPage() {
             if (currentPageElements.isNotEmpty()) {
                 pages.add(ChapterPage(currentPageElements))
                 currentPageElements = mutableListOf()
-                currentLinesOnPage = 0f
+                currentHeightPx = 0f
             }
         }
 
@@ -1255,31 +1698,41 @@ object NativeChapterParser {
                         2 -> 1.30f
                         else -> 1.15f
                     }
-                    val headingCharsPerLine = (charsPerLine / headingScale).toInt().coerceAtLeast(15)
-                    val rawLines = estimateLines(element.text.text, headingCharsPerLine)
-                    val extraSpacingLines = if (element.level == 1) 16f / lineHeightDp else 10f / lineHeightDp
-                    val headingLines = (rawLines * headingScale) + extraSpacingLines
+                    val headingPaint = TextPaint(bodyPaint).apply {
+                        textSize = bodyTextSizePx * headingScale
+                        typeface = Typeface.create(baseTypeface, Typeface.BOLD)
+                    }
+                    val layout = buildStaticLayout(element.text.text, headingPaint, availableWidthPx)
+                    val headingLineHeightPx = bodyTextSizePx * headingScale * 1.3f
+                    val topPadPx = (if (element.level == 1) 12f else 6f) * density
+                    val bottomPadPx = 4f * density
+                    val spacingBefore = if (currentPageElements.isNotEmpty()) paragraphSpacingPx else 0f
+                    val totalHeadingHeightPx = topPadPx + (layout.lineCount * headingLineHeightPx) + bottomPadPx
 
-                    if (currentLinesOnPage > 0f && currentLinesOnPage + headingLines > maxLinesPerPage) {
+                    if (currentPageElements.isNotEmpty() && currentHeightPx + spacingBefore + totalHeadingHeightPx > availableHeightPx) {
                         commitPage()
                     }
                     if (currentPageElements.isNotEmpty()) {
-                        currentLinesOnPage += paragraphSpacingInLines
+                        currentHeightPx += paragraphSpacingPx
                     }
                     currentPageElements.add(element)
-                    currentLinesOnPage += headingLines
+                    currentHeightPx += totalHeadingHeightPx
                 }
+
                 is ChapterElement.Image -> {
-                    val imgLines = (availableHeightDp * 0.45f / lineHeightDp).coerceAtLeast(6f)
-                    if (currentLinesOnPage > 0f && currentLinesOnPage + imgLines > maxLinesPerPage) {
+                    val imgHeightPx = (availableHeightPx * 0.45f).coerceAtLeast(bodyLineHeightPx * 5f)
+                    val spacingBefore = if (currentPageElements.isNotEmpty()) paragraphSpacingPx else 0f
+
+                    if (currentPageElements.isNotEmpty() && currentHeightPx + spacingBefore + imgHeightPx > availableHeightPx) {
                         commitPage()
                     }
                     if (currentPageElements.isNotEmpty()) {
-                        currentLinesOnPage += paragraphSpacingInLines
+                        currentHeightPx += paragraphSpacingPx
                     }
                     currentPageElements.add(element)
-                    currentLinesOnPage += imgLines
+                    currentHeightPx += imgHeightPx
                 }
+
                 is ChapterElement.Paragraph -> {
                     val fullAnnotated = element.text
                     val rawText = fullAnnotated.text
@@ -1291,34 +1744,47 @@ object NativeChapterParser {
                         }
                         if (remainingStart >= rawText.length) break
 
-                        val spacingCost = if (currentPageElements.isNotEmpty()) paragraphSpacingInLines else 0f
-                        val availableLines = maxLinesPerPage - (currentLinesOnPage + spacingCost)
+                        val spacingBefore = if (currentPageElements.isNotEmpty()) paragraphSpacingPx else 0f
+                        val remainingHeightPx = availableHeightPx - (currentHeightPx + spacingBefore)
+                        val maxLinesCanFit = kotlin.math.floor(remainingHeightPx / bodyLineHeightPx).toInt()
 
-                        if (availableLines < 1.5f && currentPageElements.isNotEmpty()) {
+                        if (maxLinesCanFit < 1 && currentPageElements.isNotEmpty()) {
                             commitPage()
                             continue
                         }
 
-                        val linesCanFit = if (currentPageElements.isEmpty()) maxLinesPerPage else availableLines
-                        val maxCharsForRemaining = (linesCanFit * charsPerLine).toInt().coerceAtLeast(charsPerLine)
+                        val sliceText = rawText.substring(remainingStart)
+                        val layout = buildStaticLayout(sliceText, bodyPaint, availableWidthPx)
+                        val totalLines = layout.lineCount.coerceAtLeast(1)
+                        val allowedLines = if (currentPageElements.isEmpty()) {
+                            maxLinesCanFit.coerceAtLeast(1)
+                        } else {
+                            maxLinesCanFit
+                        }
 
-                        val remainingLen = rawText.length - remainingStart
-                        if (remainingLen <= maxCharsForRemaining) {
+                        if (totalLines <= allowedLines) {
                             var subEnd = rawText.length
                             while (subEnd > remainingStart && rawText[subEnd - 1].isWhitespace()) {
                                 subEnd--
                             }
                             if (subEnd > remainingStart) {
                                 if (currentPageElements.isNotEmpty()) {
-                                    currentLinesOnPage += paragraphSpacingInLines
+                                    currentHeightPx += paragraphSpacingPx
                                 }
-                                currentPageElements.add(ChapterElement.Paragraph(fullAnnotated.subSequence(remainingStart, subEnd)))
-                                val addedLines = estimateLines(rawText.substring(remainingStart, subEnd), charsPerLine)
-                                currentLinesOnPage += addedLines
+                                currentPageElements.add(
+                                    ChapterElement.Paragraph(fullAnnotated.subSequence(remainingStart, subEnd))
+                                )
+                                currentHeightPx += totalLines * bodyLineHeightPx
                             }
                             remainingStart = rawText.length
                         } else {
-                            val cutPoint = findBestCutPoint(rawText, remainingStart, maxCharsForRemaining)
+                            val lastFittingLineIndex = (allowedLines - 1).coerceIn(0, totalLines - 1)
+                            var cutOffsetInSlice = layout.getLineEnd(lastFittingLineIndex)
+                            if (cutOffsetInSlice <= 0) {
+                                cutOffsetInSlice = sliceText.length
+                            }
+
+                            val cutPoint = (remainingStart + cutOffsetInSlice).coerceAtMost(rawText.length)
                             var subEnd = cutPoint
                             while (subEnd > remainingStart && rawText[subEnd - 1].isWhitespace()) {
                                 subEnd--
@@ -1326,9 +1792,11 @@ object NativeChapterParser {
 
                             if (subEnd > remainingStart) {
                                 if (currentPageElements.isNotEmpty()) {
-                                    currentLinesOnPage += paragraphSpacingInLines
+                                    currentHeightPx += paragraphSpacingPx
                                 }
-                                currentPageElements.add(ChapterElement.Paragraph(fullAnnotated.subSequence(remainingStart, subEnd)))
+                                currentPageElements.add(
+                                    ChapterElement.Paragraph(fullAnnotated.subSequence(remainingStart, subEnd))
+                                )
                             }
 
                             commitPage()
@@ -1343,47 +1811,15 @@ object NativeChapterParser {
         return if (pages.isEmpty()) listOf(ChapterPage(emptyList())) else pages
     }
 
-    private fun estimateLines(text: String, charsPerLine: Int): Float {
-        if (text.isEmpty()) return 0f
-        val cpl = charsPerLine.coerceAtLeast(1)
-        val lines = text.split('\n')
-        var totalLines = 0f
-        for (line in lines) {
-            val lineLen = line.length
-            totalLines += if (lineLen == 0) 1f else kotlin.math.ceil(lineLen.toFloat() / cpl.toFloat()).coerceAtLeast(1f)
+    private fun buildStaticLayout(text: CharSequence, paint: TextPaint, widthPx: Int): StaticLayout {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            StaticLayout.Builder.obtain(text, 0, text.length, paint, widthPx)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setIncludePad(false)
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            StaticLayout(text, paint, widthPx, Layout.Alignment.ALIGN_NORMAL, 1.0f, 0.0f, false)
         }
-        return totalLines
-    }
-
-    private fun findBestCutPoint(text: String, start: Int, maxChars: Int): Int {
-        val endTarget = (start + maxChars).coerceAtMost(text.length)
-        if (endTarget >= text.length) return text.length
-
-        val minCut = start + (maxChars * 0.65f).toInt()
-
-        // 1. Prefer sentence boundary (.!?)
-        for (i in endTarget downTo minCut) {
-            val c = text[i]
-            if ((c == '.' || c == '!' || c == '?') && (i + 1 == text.length || text[i + 1].isWhitespace())) {
-                return i + 1
-            }
-        }
-
-        // 2. Prefer clause boundary (,;:)
-        for (i in endTarget downTo minCut) {
-            val c = text[i]
-            if ((c == ',' || c == ';' || c == ':') && (i + 1 == text.length || text[i + 1].isWhitespace())) {
-                return i + 1
-            }
-        }
-
-        // 3. Fallback to any word boundary (space)
-        for (i in endTarget downTo start + 1) {
-            if (text[i].isWhitespace()) {
-                return i + 1
-            }
-        }
-
-        return endTarget
     }
 }

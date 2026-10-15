@@ -6,6 +6,7 @@ import com.ozon.books.model.ThemeMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.roundToInt
 
 class PreferencesManager(context: Context) {
 
@@ -36,6 +37,16 @@ class PreferencesManager(context: Context) {
         loadInitialFontSizePx()
     )
     val fontSizePx: StateFlow<Int> = _fontSizePx.asStateFlow()
+
+    private val _lineHeightMultiplier = MutableStateFlow(
+        prefs.getFloat(KEY_LINE_HEIGHT_MULTIPLIER, DEFAULT_LINE_HEIGHT_MULTIPLIER)
+    )
+    val lineHeightMultiplier: StateFlow<Float> = _lineHeightMultiplier.asStateFlow()
+
+    private val _isJustified = MutableStateFlow(
+        prefs.getBoolean(KEY_IS_JUSTIFIED, false)
+    )
+    val isJustified: StateFlow<Boolean> = _isJustified.asStateFlow()
 
     private fun loadInitialFontSizePx(): Int {
         val raw = prefs.getInt(KEY_FONT_SIZE_PX, -1)
@@ -110,8 +121,20 @@ class PreferencesManager(context: Context) {
         _isPaginated.value = enabled
     }
 
+    fun setLineHeightMultiplier(multiplier: Float) {
+        val safeMultiplier = ((multiplier * 10).roundToInt() / 10f).coerceIn(1.2f, 2.0f)
+        prefs.edit().putFloat(KEY_LINE_HEIGHT_MULTIPLIER, safeMultiplier).apply()
+        _lineHeightMultiplier.value = safeMultiplier
+    }
+
+    fun setIsJustified(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_IS_JUSTIFIED, enabled).apply()
+        _isJustified.value = enabled
+    }
+
     companion object {
         const val DEFAULT_FONT_SIZE_PX = 16
+        const val DEFAULT_LINE_HEIGHT_MULTIPLIER = 1.4f
         private const val KEY_THEME_MODE = "key_theme_mode"
         private const val KEY_OLED_MODE = "key_oled_mode"
         private const val KEY_DYNAMIC_COLOR = "key_dynamic_color"
@@ -120,6 +143,8 @@ class PreferencesManager(context: Context) {
         private const val KEY_OLD_FONT_SIZE = "key_font_size"
         private const val KEY_FONT_FAMILY = "key_font_family"
         private const val KEY_IS_PAGINATED = "key_is_paginated"
+        private const val KEY_LINE_HEIGHT_MULTIPLIER = "key_line_height_multiplier"
+        private const val KEY_IS_JUSTIFIED = "key_is_justified"
 
         @Volatile
         private var INSTANCE: PreferencesManager? = null
