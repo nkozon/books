@@ -80,6 +80,8 @@ fun SettingsScreen(
     onFontSizeChanged: (Int) -> Unit,
     fontFamily: String,
     onFontFamilyChanged: (String) -> Unit,
+    useLiterata: Boolean = true,
+    onUseLiterataChanged: (Boolean) -> Unit = {},
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
     val scrollState = rememberScrollState()
@@ -302,7 +304,7 @@ fun SettingsScreen(
         // Reader Preferences Section
         SettingsSection(title = "Reader Preferences") {
             // Item 0: Font Size Slider
-            SettingsItemContainer(index = 0, total = 2) {
+            SettingsItemContainer(index = 0, total = 3) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -348,10 +350,34 @@ fun SettingsScreen(
                 }
             }
 
-            // Item 1: Font Family Selector
+            // Item 1: Use Literata Switch
+            SettingsItemContainer(index = 1, total = 3) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Use Literata", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = "Use Literata instead of default serif font",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = useLiterata,
+                        onCheckedChange = onUseLiterataChanged
+                    )
+                }
+            }
+
+            // Item 2: Font Family Selector
             SettingsItemContainer(
-                index = 1,
-                total = 2,
+                index = 2,
+                total = 3,
                 onClick = { fontDropdownExpanded = true }
             ) {
                 Row(
@@ -373,12 +399,17 @@ fun SettingsScreen(
                     }
 
                     Box {
+                        val displayedFamily = if (fontFamily.equals("Serif", ignoreCase = true) && useLiterata) {
+                            "Literata"
+                        } else {
+                            fontFamily
+                        }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Text(
-                                text = fontFamily,
+                                text = displayedFamily,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.SemiBold
@@ -400,10 +431,15 @@ fun SettingsScreen(
                         ) {
                             fontOptions.forEach { opt ->
                                 val isSelected = opt.equals(fontFamily, ignoreCase = true)
+                                val optionLabel = if (opt.equals("Serif", ignoreCase = true) && useLiterata) {
+                                    "Serif (Literata)"
+                                } else {
+                                    opt
+                                }
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            text = opt,
+                                            text = optionLabel,
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                             color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                         )

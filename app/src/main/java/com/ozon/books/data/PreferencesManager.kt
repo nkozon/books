@@ -72,6 +72,11 @@ class PreferencesManager(context: Context) {
     )
     val fontFamily: StateFlow<String> = _fontFamily.asStateFlow()
 
+    private val _useLiterata = MutableStateFlow(
+        prefs.getBoolean(KEY_USE_LITERATA, true)
+    )
+    val useLiterata: StateFlow<Boolean> = _useLiterata.asStateFlow()
+
     private val _isPaginated = MutableStateFlow(
         prefs.getBoolean(KEY_IS_PAGINATED, true)
     )
@@ -116,6 +121,11 @@ class PreferencesManager(context: Context) {
         _fontFamily.value = family
     }
 
+    fun setUseLiterata(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_USE_LITERATA, enabled).apply()
+        _useLiterata.value = enabled
+    }
+
     fun setIsPaginated(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_IS_PAGINATED, enabled).apply()
         _isPaginated.value = enabled
@@ -142,6 +152,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_FONT_SIZE_PX = "key_font_size_px"
         private const val KEY_OLD_FONT_SIZE = "key_font_size"
         private const val KEY_FONT_FAMILY = "key_font_family"
+        private const val KEY_USE_LITERATA = "key_use_literata"
         private const val KEY_IS_PAGINATED = "key_is_paginated"
         private const val KEY_LINE_HEIGHT_MULTIPLIER = "key_line_height_multiplier"
         private const val KEY_IS_JUSTIFIED = "key_is_justified"

@@ -109,6 +109,7 @@ fun MainApp(
     val customAccentColor by preferencesManager.customAccentColor.collectAsState()
     val fontSizePx by preferencesManager.fontSizePx.collectAsState()
     val fontFamily by preferencesManager.fontFamily.collectAsState()
+    val useLiterata by preferencesManager.useLiterata.collectAsState()
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var activeReadingBookId by remember { mutableStateOf<String?>(null) }
@@ -444,6 +445,8 @@ fun MainApp(
                             onFontFamilyChanged = { newFamily ->
                                 preferencesManager.setFontFamily(newFamily)
                             },
+                            useLiterata = useLiterata,
+                            onUseLiterataChanged = { preferencesManager.setUseLiterata(it) },
                             contentPadding = contentPadding
                         )
                     }

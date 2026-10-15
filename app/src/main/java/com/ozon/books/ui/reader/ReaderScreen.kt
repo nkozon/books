@@ -5,9 +5,11 @@ import android.content.Context
 import android.graphics.Typeface
 import android.os.Build
 import android.text.Layout
+import android.text.SpannableString
 import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.text.style.LeadingMarginSpan
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -56,6 +58,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.FormatAlignLeft
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.FormatAlignJustify
 import androidx.compose.material.icons.rounded.FormatListNumbered
@@ -107,17 +110,21 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.res.ResourcesCompat
 import androidx.core.text.HtmlCompat
 import androidx.core.view.WindowCompat
+import com.ozon.books.R
 import com.ozon.books.data.BookRepository
 import com.ozon.books.data.PreferencesManager
 import com.ozon.books.model.Book
@@ -134,7 +141,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 sealed class ChapterElement {
-    data class Paragraph(val text: AnnotatedString) : ChapterElement()
+    data class Paragraph(
+        val text: AnnotatedString,
+        val isFirstLineIndented: Boolean = true
+    ) : ChapterElement()
     data class Heading(val text: AnnotatedString, val level: Int) : ChapterElement()
     data class Image(val absolutePath: String) : ChapterElement()
 }
@@ -165,6 +175,13 @@ private val TocTopShape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, b
 private val TocBottomShape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
 private val TocMiddleShape = RoundedCornerShape(4.dp)
 
+val LiterataFontFamily = FontFamily(
+    Font(resId = R.font.literata, weight = FontWeight.Normal, style = FontStyle.Normal),
+    Font(resId = R.font.literata, weight = FontWeight.Bold, style = FontStyle.Normal),
+    Font(resId = R.font.literata_italic, weight = FontWeight.Normal, style = FontStyle.Italic),
+    Font(resId = R.font.literata_italic, weight = FontWeight.Bold, style = FontStyle.Italic)
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderScreen(
@@ -180,10 +197,19 @@ fun ReaderScreen(
     val isDark = LocalThemeIsDark.current
     val isOled = LocalThemeIsOled.current
     val fontFamily by preferencesManager.fontFamily.collectAsState()
+    val useLiterata by preferencesManager.useLiterata.collectAsState()
     val savedFontSize by preferencesManager.fontSizePx.collectAsState()
     val lineHeightMultiplier by preferencesManager.lineHeightMultiplier.collectAsState()
     val isJustified by preferencesManager.isJustified.collectAsState()
     val isPaginated by preferencesManager.isPaginated.collectAsState()
+
+    val literataTypeface = remember(context) {
+        try {
+            ResourcesCompat.getFont(context, R.font.literata)
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     var readerBgTheme by remember {
         mutableStateOf(
@@ -265,7 +291,7 @@ fun ReaderScreen(
     }
 
     // Parse and paginate all chapters into a unified page list across the entire book
-    LaunchedEffect(chapters, fontSizePx, lineHeightMultiplier, fontFamily, fontScale, densityScale, contentWidthDp, contentHeightDp) {
+    LaunchedEffect(chapters, fontSizePx, lineHeightMultiplier, fontFamily, useLiterata, fontScale, densityScale, contentWidthDp, contentHeightDp) {
         if (chapters.isEmpty()) return@LaunchedEffect
         val pagesList = withContext(Dispatchers.IO) {
             for (ch in chapters) {
@@ -280,6 +306,8 @@ fun ReaderScreen(
                 }
             }
             val list = mutableListOf<BookPage>()
+            val isSerif = fontFamily.equals("Serif", ignoreCase = true) || fontFamily.equals("Literata", ignoreCase = true)
+            val customTypeface = if (useLiterata && isSerif) literataTypeface else null
             for (ch in chapters) {
                 val elems = rawElementsMap[ch.index] ?: emptyList()
                 val chPages = NativeChapterParser.paginate(
@@ -290,7 +318,8 @@ fun ReaderScreen(
                     density = densityScale,
                     fontScale = fontScale,
                     contentWidthDp = contentWidthDp,
-                    contentHeightDp = contentHeightDp
+                    contentHeightDp = contentHeightDp,
+                    customTypeface = customTypeface
                 )
                 val totalInCh = chPages.size
                 for ((pIdx, page) in chPages.withIndex()) {
@@ -448,8 +477,9 @@ fun ReaderScreen(
         return
     }
 
+    val isSerif = fontFamily.equals("Serif", ignoreCase = true) || fontFamily.equals("Literata", ignoreCase = true)
     val resolvedFontFamily = when {
-        fontFamily.equals("Serif", ignoreCase = true) -> FontFamily.Serif
+        isSerif -> if (useLiterata) LiterataFontFamily else FontFamily.Serif
         fontFamily.equals("Monospace", ignoreCase = true) || fontFamily.equals("Mono", ignoreCase = true) -> FontFamily.Monospace
         else -> FontFamily.SansSerif
     }
@@ -723,7 +753,7 @@ fun ReaderScreen(
                             )
                             Text(
                                 text = currentChapter?.title ?: "Chapter ${activeChapterIndex + 1}",
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                                 color = textColor.copy(alpha = 0.72f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -969,7 +999,52 @@ fun ReaderScreen(
                                                 )
                                             }
 
-                                            // 5. Typeface
+                                            // 5. Use Literata Toggle
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clip(RoundedCornerShape(16.dp))
+                                                    .clickable { preferencesManager.setUseLiterata(!useLiterata) }
+                                                    .background(
+                                                        if (useLiterata) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                                        else MaterialTheme.colorScheme.surfaceContainerLow
+                                                    )
+                                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.Book,
+                                                        contentDescription = null,
+                                                        tint = if (useLiterata) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                    Text(
+                                                        text = "Use Literata",
+                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                                Switch(
+                                                    checked = useLiterata,
+                                                    onCheckedChange = { preferencesManager.setUseLiterata(it) },
+                                                    thumbContent = if (useLiterata) {
+                                                        {
+                                                            Icon(
+                                                                imageVector = Icons.Rounded.Check,
+                                                                contentDescription = null,
+                                                                modifier = Modifier.size(SwitchDefaults.IconSize)
+                                                            )
+                                                        }
+                                                    } else null
+                                                )
+                                            }
+
+                                            // 6. Typeface
                                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                                 Text(
                                                     text = "Typeface",
@@ -981,15 +1056,19 @@ fun ReaderScreen(
                                                     modifier = Modifier.fillMaxWidth(),
                                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                                 ) {
-                                                    val families = listOf("Serif", "Sans", "Mono")
+                                                    val serifLabel = if (useLiterata) "Literata" else "Serif"
+                                                    val families = listOf(serifLabel, "Sans", "Mono")
                                                     families.forEachIndexed { idx, familyName ->
                                                         val target = when (familyName) {
                                                             "Sans" -> "Sans-Serif"
                                                             "Mono" -> "Monospace"
                                                             else -> "Serif"
                                                         }
-                                                        val isSelected = fontFamily.equals(target, ignoreCase = true) ||
-                                                                (target == "Sans-Serif" && fontFamily.equals("Sans", ignoreCase = true))
+                                                        val isSelected = when (target) {
+                                                            "Sans-Serif" -> fontFamily.equals("Sans-Serif", ignoreCase = true) || fontFamily.equals("Sans", ignoreCase = true)
+                                                            "Monospace" -> fontFamily.equals("Monospace", ignoreCase = true) || fontFamily.equals("Mono", ignoreCase = true)
+                                                            else -> isSerif
+                                                        }
 
                                                         DynamicSegmentedButton(
                                                             text = familyName,
@@ -1297,7 +1376,6 @@ private fun DynamicSegmentedButton(
         onClick = onClick,
         shape = shape,
         color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-        border = if (isSelected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
         modifier = modifier
     ) {
         Box(
@@ -1401,7 +1479,7 @@ private fun ChapterElementItem(
                     fontSize = headingFontSize,
                     lineHeight = headingLineHeight,
                     letterSpacing = 0.sp,
-                    fontWeight = if (element.level <= 2) FontWeight.Bold else FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
                     fontFamily = fontFamily,
                     color = textColor,
                     textAlign = TextAlign.Center,
@@ -1431,6 +1509,11 @@ private fun ChapterElementItem(
                     fontFamily = fontFamily,
                     color = textColor,
                     textAlign = if (isJustified) TextAlign.Justify else TextAlign.Start,
+                    textIndent = if (element.isFirstLineIndented) {
+                        TextIndent(firstLine = (fontSizePx * 1.5f).sp)
+                    } else {
+                        null
+                    },
                     platformStyle = PlatformTextStyle(includeFontPadding = false),
                     lineHeightStyle = LineHeightStyle(
                         alignment = LineHeightStyle.Alignment.Center,
@@ -1654,7 +1737,8 @@ object NativeChapterParser {
         density: Float,
         fontScale: Float,
         contentWidthDp: Int,
-        contentHeightDp: Int
+        contentHeightDp: Int,
+        customTypeface: Typeface? = null
     ): List<ChapterPage> {
         if (elements.isEmpty()) return listOf(ChapterPage(emptyList()))
 
@@ -1665,8 +1749,10 @@ object NativeChapterParser {
         val bodyTextSizePx = fontSizePx * density * fontScale
         val bodyLineHeightPx = bodyTextSizePx * lineHeightMultiplier
         val paragraphSpacingPx = 8f * density
+        val paragraphIndentPx = (fontSizePx * 1.5f) * density * fontScale
 
         val baseTypeface = when {
+            customTypeface != null -> customTypeface
             fontFamilyName.equals("Monospace", ignoreCase = true) || fontFamilyName.equals("Mono", ignoreCase = true) -> Typeface.MONOSPACE
             fontFamilyName.equals("Serif", ignoreCase = true) -> Typeface.SERIF
             else -> Typeface.SANS_SERIF
@@ -1737,6 +1823,7 @@ object NativeChapterParser {
                     val fullAnnotated = element.text
                     val rawText = fullAnnotated.text
                     var remainingStart = 0
+                    var isFirstSlice = element.isFirstLineIndented
 
                     while (remainingStart < rawText.length) {
                         while (remainingStart < rawText.length && rawText[remainingStart].isWhitespace()) {
@@ -1754,7 +1841,19 @@ object NativeChapterParser {
                         }
 
                         val sliceText = rawText.substring(remainingStart)
-                        val layout = buildStaticLayout(sliceText, bodyPaint, availableWidthPx)
+                        val charSequence: CharSequence = if (isFirstSlice && paragraphIndentPx > 0f) {
+                            SpannableString(sliceText).apply {
+                                setSpan(
+                                    LeadingMarginSpan.Standard(paragraphIndentPx.toInt(), 0),
+                                    0,
+                                    length,
+                                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                                )
+                            }
+                        } else {
+                            sliceText
+                        }
+                        val layout = buildStaticLayout(charSequence, bodyPaint, availableWidthPx)
                         val totalLines = layout.lineCount.coerceAtLeast(1)
                         val allowedLines = if (currentPageElements.isEmpty()) {
                             maxLinesCanFit.coerceAtLeast(1)
@@ -1772,7 +1871,10 @@ object NativeChapterParser {
                                     currentHeightPx += paragraphSpacingPx
                                 }
                                 currentPageElements.add(
-                                    ChapterElement.Paragraph(fullAnnotated.subSequence(remainingStart, subEnd))
+                                    ChapterElement.Paragraph(
+                                        text = fullAnnotated.subSequence(remainingStart, subEnd),
+                                        isFirstLineIndented = isFirstSlice
+                                    )
                                 )
                                 currentHeightPx += totalLines * bodyLineHeightPx
                             }
@@ -1795,12 +1897,16 @@ object NativeChapterParser {
                                     currentHeightPx += paragraphSpacingPx
                                 }
                                 currentPageElements.add(
-                                    ChapterElement.Paragraph(fullAnnotated.subSequence(remainingStart, subEnd))
+                                    ChapterElement.Paragraph(
+                                        text = fullAnnotated.subSequence(remainingStart, subEnd),
+                                        isFirstLineIndented = isFirstSlice
+                                    )
                                 )
                             }
 
                             commitPage()
                             remainingStart = cutPoint
+                            isFirstSlice = false
                         }
                     }
                 }
