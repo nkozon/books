@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -46,7 +45,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -370,12 +368,14 @@ fun ThemeModeItem(
  * Sort Dropdown pill matching nkozon/notes SortDropdown
  */
 enum class BookSortOrder(val label: String) {
-    RECENT("Recent"),
+    RECENTLY_ADDED("Recently Added"),
+    RECENTLY_READ("Recently Read"),
     TITLE("Title (A-Z)"),
     AUTHOR("Author (A-Z)");
 
     fun toShortLabel(): String = when (this) {
-        RECENT -> "Recent"
+        RECENTLY_ADDED -> "Added"
+        RECENTLY_READ -> "Read"
         TITLE -> "Title"
         AUTHOR -> "Author"
     }
@@ -385,7 +385,12 @@ enum class BookSortOrder(val label: String) {
 fun SortDropdown(
     selectedOrder: BookSortOrder,
     onOrderSelected: (BookSortOrder) -> Unit,
-    availableOrders: List<BookSortOrder> = listOf(BookSortOrder.RECENT, BookSortOrder.TITLE, BookSortOrder.AUTHOR),
+    availableOrders: List<BookSortOrder> = listOf(
+        BookSortOrder.RECENTLY_ADDED,
+        BookSortOrder.RECENTLY_READ,
+        BookSortOrder.TITLE,
+        BookSortOrder.AUTHOR
+    ),
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     iconOnly: Boolean = false
@@ -478,12 +483,13 @@ fun ModernFloatingNavigationBar(
     selectedTabIndex: Int,
     onTabSelected: (Int) -> Unit,
     tabs: List<Pair<String, ImageVector>>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    vertical: Boolean = false
 ) {
     val hapticFeedback = LocalHapticFeedback.current
 
     Surface(
-        modifier = modifier.height(56.dp),
+        modifier = if (vertical) modifier.width(56.dp) else modifier.height(56.dp),
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shadowElevation = 8.dp,
@@ -493,13 +499,7 @@ fun ModernFloatingNavigationBar(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
         )
     ) {
-        Row(
-            modifier = Modifier
-                .wrapContentWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        val items: @Composable () -> Unit = {
             tabs.forEachIndexed { index, (title, icon) ->
                 val isSelected = selectedTabIndex == index
 
@@ -531,7 +531,10 @@ fun ModernFloatingNavigationBar(
 
                 Box(
                     modifier = Modifier
-                        .size(width = 64.dp, height = 40.dp)
+                        .size(
+                            width = if (vertical) 40.dp else 64.dp,
+                            height = if (vertical) 64.dp else 40.dp
+                        )
                         .clip(CircleShape)
                         .clickable(
                             role = androidx.compose.ui.semantics.Role.Tab,
@@ -548,8 +551,8 @@ fun ModernFloatingNavigationBar(
                 ) {
                     Box(
                         modifier = Modifier
-                            .width(indicatorWidth)
-                            .height(40.dp)
+                            .width(if (vertical) 40.dp else indicatorWidth)
+                            .height(if (vertical) indicatorWidth else 40.dp)
                             .clip(CircleShape)
                             .background(indicatorColor),
                         contentAlignment = Alignment.Center
@@ -563,6 +566,19 @@ fun ModernFloatingNavigationBar(
                     }
                 }
             }
+        }
+        if (vertical) {
+            Column(
+                modifier = Modifier.padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) { items() }
+        } else {
+            Row(
+                modifier = Modifier.wrapContentWidth().padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) { items() }
         }
     }
 }

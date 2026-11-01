@@ -1,10 +1,6 @@
 package com.ozon.books.ui.home
 
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,32 +10,27 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.ozon.books.model.Book
 import com.ozon.books.ui.components.BookCoverView
-import com.ozon.books.ui.components.CircleIconButton
 import com.ozon.books.ui.components.EmptyTabState
 
 @Composable
@@ -69,31 +60,20 @@ fun HomeScreen(
     } else {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = contentPadding,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            contentPadding = contentPadding
         ) {
             item {
-                Spacer(modifier = Modifier.height(6.dp))
-            }
-            itemsIndexed(recentlyReadBooks, key = { _, b -> b.id }) { index, book ->
-                val isFirst = index == 0
-                val isLast = index == recentlyReadBooks.size - 1
-
-                val targetTopRadius = if (isFirst) 28.dp else 4.dp
-                val targetBottomRadius = if (isLast) 28.dp else 4.dp
-
-                val topRadius by animateDpAsState(targetValue = targetTopRadius, label = "topRadius")
-                val bottomRadius by animateDpAsState(targetValue = targetBottomRadius, label = "bottomRadius")
-
-                val shape = remember(topRadius, bottomRadius) {
-                    RoundedCornerShape(topRadius, topRadius, bottomRadius, bottomRadius)
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    items(recentlyReadBooks, key = { it.id }) { book ->
+                        RecentBookCard(
+                            book = book,
+                            onClick = { onBookClick(book.id) }
+                        )
+                    }
                 }
-
-                RecentBookCard(
-                    book = book,
-                    shape = shape,
-                    onClick = { onBookClick(book.id) }
-                )
             }
         }
     }
@@ -102,109 +82,56 @@ fun HomeScreen(
 @Composable
 private fun RecentBookCard(
     book: Book,
-    shape: androidx.compose.ui.graphics.Shape,
     onClick: () -> Unit
 ) {
+    val progress = book.progressPercent.coerceIn(0, 100)
+
     Surface(
         onClick = onClick,
-        shape = shape,
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.width(204.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Column(modifier = Modifier.padding(12.dp)) {
             BookCoverView(
                 book = book,
                 modifier = Modifier
-                    .width(62.dp)
+                    .fillMaxWidth()
                     .aspectRatio(0.68f)
             )
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = book.title,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+            Text(
+                text = book.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
 
-                Text(
-                    text = book.author,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
+            Spacer(modifier = Modifier.height(12.dp))
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh
-                    ) {
-                        Text(
-                            text = "Ch. ${book.currentChapterIndex + 1} of ${book.totalChapters}",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Text(
-                            text = "${book.progressPercent}%",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 LinearProgressIndicator(
-                    progress = { book.progressPercent / 100f },
+                    progress = { progress / 100f },
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
+                        .weight(1f)
+                        .height(6.dp)
                         .clip(CircleShape),
                     color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
                 )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.size(40.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    androidx.compose.material3.Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
-                        contentDescription = "Read",
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
+                Text(
+                    text = "$progress%",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }

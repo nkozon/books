@@ -2,6 +2,8 @@ package com.ozon.books.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.ozon.books.model.ReaderBgTheme
+import com.ozon.books.model.ReaderTypeface
 import com.ozon.books.model.ThemeMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -48,6 +50,24 @@ class PreferencesManager(context: Context) {
     )
     val isJustified: StateFlow<Boolean> = _isJustified.asStateFlow()
 
+    private val _isPaginated = MutableStateFlow(
+        prefs.getBoolean(KEY_IS_PAGINATED, true)
+    )
+    val isPaginated: StateFlow<Boolean> = _isPaginated.asStateFlow()
+
+    private val _twoPageReading = MutableStateFlow(
+        prefs.getBoolean(KEY_TWO_PAGE_READING, true)
+    )
+    val twoPageReading: StateFlow<Boolean> = _twoPageReading.asStateFlow()
+
+    private val _typeface = MutableStateFlow(loadInitialTypeface())
+    val typeface: StateFlow<ReaderTypeface> = _typeface.asStateFlow()
+
+    private val _readerBgTheme = MutableStateFlow(
+        ReaderBgTheme.fromId(prefs.getString(KEY_READER_BG_THEME, ReaderBgTheme.SYSTEM.id))
+    )
+    val readerBgTheme: StateFlow<ReaderBgTheme> = _readerBgTheme.asStateFlow()
+
     private fun loadInitialFontSizePx(): Int {
         val raw = prefs.getInt(KEY_FONT_SIZE_PX, -1)
         if (raw in 10..22) return raw
@@ -67,20 +87,20 @@ class PreferencesManager(context: Context) {
         return DEFAULT_FONT_SIZE_PX
     }
 
-    private val _fontFamily = MutableStateFlow(
-        prefs.getString(KEY_FONT_FAMILY, "Serif") ?: "Serif"
-    )
-    val fontFamily: StateFlow<String> = _fontFamily.asStateFlow()
-
-    private val _useLiterata = MutableStateFlow(
-        prefs.getBoolean(KEY_USE_LITERATA, true)
-    )
-    val useLiterata: StateFlow<Boolean> = _useLiterata.asStateFlow()
-
-    private val _isPaginated = MutableStateFlow(
-        prefs.getBoolean(KEY_IS_PAGINATED, true)
-    )
-    val isPaginated: StateFlow<Boolean> = _isPaginated.asStateFlow()
+    private fun loadInitialTypeface(): ReaderTypeface {
+        val stored = prefs.getString(KEY_TYPEFACE, null)
+        if (stored != null) return ReaderTypeface.fromId(stored)
+        val migrated = ReaderTypeface.fromLegacy(
+            fontFamily = prefs.getString(KEY_FONT_FAMILY, null),
+            useLiterata = prefs.getBoolean(KEY_USE_LITERATA, true)
+        )
+        prefs.edit()
+            .putString(KEY_TYPEFACE, migrated.id)
+            .remove(KEY_FONT_FAMILY)
+            .remove(KEY_USE_LITERATA)
+            .apply()
+        return migrated
+    }
 
     fun setThemeMode(mode: ThemeMode) {
         prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
@@ -116,19 +136,19 @@ class PreferencesManager(context: Context) {
         _fontSizePx.value = safePx
     }
 
-    fun setFontFamily(family: String) {
-        prefs.edit().putString(KEY_FONT_FAMILY, family).apply()
-        _fontFamily.value = family
-    }
-
-    fun setUseLiterata(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_USE_LITERATA, enabled).apply()
-        _useLiterata.value = enabled
+    fun setTypeface(typeface: ReaderTypeface) {
+        prefs.edit().putString(KEY_TYPEFACE, typeface.id).apply()
+        _typeface.value = typeface
     }
 
     fun setIsPaginated(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_IS_PAGINATED, enabled).apply()
         _isPaginated.value = enabled
+    }
+
+    fun setTwoPageReading(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TWO_PAGE_READING, enabled).apply()
+        _twoPageReading.value = enabled
     }
 
     fun setLineHeightMultiplier(multiplier: Float) {
@@ -142,6 +162,11 @@ class PreferencesManager(context: Context) {
         _isJustified.value = enabled
     }
 
+    fun setReaderBgTheme(theme: ReaderBgTheme) {
+        prefs.edit().putString(KEY_READER_BG_THEME, theme.id).apply()
+        _readerBgTheme.value = theme
+    }
+
     companion object {
         const val DEFAULT_FONT_SIZE_PX = 16
         const val DEFAULT_LINE_HEIGHT_MULTIPLIER = 1.4f
@@ -153,9 +178,12 @@ class PreferencesManager(context: Context) {
         private const val KEY_OLD_FONT_SIZE = "key_font_size"
         private const val KEY_FONT_FAMILY = "key_font_family"
         private const val KEY_USE_LITERATA = "key_use_literata"
+        private const val KEY_TYPEFACE = "key_typeface"
+        private const val KEY_TWO_PAGE_READING = "key_two_page_reading"
         private const val KEY_IS_PAGINATED = "key_is_paginated"
         private const val KEY_LINE_HEIGHT_MULTIPLIER = "key_line_height_multiplier"
         private const val KEY_IS_JUSTIFIED = "key_is_justified"
+        private const val KEY_READER_BG_THEME = "key_reader_bg_theme"
 
         @Volatile
         private var INSTANCE: PreferencesManager? = null

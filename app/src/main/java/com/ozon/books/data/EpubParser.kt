@@ -4,9 +4,10 @@ import com.ozon.books.model.Chapter
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
-import java.net.URLDecoder
 import java.util.zip.ZipInputStream
+import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 
 data class ParsedEpub(
@@ -19,39 +20,59 @@ data class ParsedEpub(
 
 object EpubParser {
 
+    private const val MAX_ENTRY_COUNT = 10_000
+    private const val MAX_TOTAL_UNCOMPRESSED_BYTES = 512L * 1024L * 1024L
+    private const val MAX_SINGLE_ENTRY_BYTES = 128L * 1024L * 1024L
+    private const val COPY_BUFFER_SIZE = 32 * 1024
+
+    /**
+     * Extracts an EPUB file into target directory and parses its contents.
+     * [cancellationCheck] is invoked while copying entries so a cancelled import stops promptly.
+     */
+    fun parse(
+        epubFile: File,
+        targetDir: File,
+        cancellationCheck: () -> Unit = {}
+    ): ParsedEpub {
+        FileInputStream(epubFile).use { input ->
+            return parse(input, targetDir, cancellationCheck)
+        }
+    }
+
     /**
      * Extracts an EPUB InputStream into target directory and parses its contents.
+     * The supplied stream is owned and closed by this method.
      */
-    fun parse(epubInputStream: InputStream, targetDir: File): ParsedEpub {
-        if (!targetDir.exists()) {
-            targetDir.mkdirs()
+    fun parse(
+        epubInputStream: InputStream,
+        targetDir: File,
+        cancellationCheck: () -> Unit = {}
+    ): ParsedEpub {
+        try {
+            cancellationCheck()
+            if (!targetDir.exists()) targetDir.mkdirs()
+            unzip(epubInputStream, targetDir, cancellationCheck)
+            cancellationCheck()
+            return parseExtracted(targetDir)
+        } catch (e: Exception) {
+            targetDir.deleteRecursively()
+            throw e
         }
-
-        // 1. Unzip EPUB contents
-        unzip(epubInputStream, targetDir)
-
-        // 2. Parse extracted EPUB
-        return parseExtracted(targetDir)
     }
 
     /**
      * Parses an already extracted EPUB folder.
      */
-    fun parseExtracted(rootDir: File): ParsedEpub {
+    fun parseExtracted(
+        rootDir: File,
+        cancellationCheck: () -> Unit = {}
+    ): ParsedEpub {
+        cancellationCheck()
         val opfFile = findOpfFile(rootDir)
             ?: throw IllegalStateException("Invalid EPUB: No OPF package file found")
 
         val opfDir = opfFile.parentFile ?: rootDir
-        val docFactory = DocumentBuilderFactory.newInstance().apply {
-            isNamespaceAware = true
-            try {
-                setFeature("http://apache.org/xml/features/disallow-doctype-decl", false)
-                setFeature("http://xml.org/sax/features/external-general-entities", false)
-                setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-            } catch (_: Exception) {
-            }
-        }
-        val docBuilder = docFactory.newDocumentBuilder()
+        val docBuilder = secureDocumentBuilderFactory().newDocumentBuilder()
         val doc = docBuilder.parse(opfFile)
 
         // Parse Metadata
@@ -114,14 +135,16 @@ object EpubParser {
         } else {
             manifestItems.values.find {
                 it.mediaType.startsWith("image/") &&
-                        (it.id.contains("cover", ignoreCase = true) || it.href.contains("cover", ignoreCase = true))
+                    (it.id.contains("cover", ignoreCase = true) || it.href.contains("cover", ignoreCase = true))
             }
         }
 
-        if (coverManifestItem != null) {
-            val decodedHref = URLDecoder.decode(coverManifestItem.href, "UTF-8")
-            val coverFile = File(opfDir, decodedHref)
-            if (coverFile.exists()) {
+        if (coverManifestItem != null &&
+            coverManifestItem.mediaType.startsWith("image/") &&
+            !coverManifestItem.mediaType.contains("svg", ignoreCase = true)
+        ) {
+            val coverFile = PathSafety.resolveWithin(rootDir, opfDir, coverManifestItem.href)
+            if (coverFile != null && coverFile.exists()) {
                 coverImagePath = coverFile.absolutePath
             }
         }
@@ -136,13 +159,13 @@ object EpubParser {
             val itemrefs = spineElement.getElementsByTagName("itemref")
             for (i in 0 until itemrefs.length) {
                 val itemref = itemrefs.item(i) as Element
+                if (itemref.getAttribute("linear").equals("no", ignoreCase = true)) continue
                 val idref = itemref.getAttribute("idref")
-                spineIdRefs.add(idref)
+                if (idref.isNotBlank()) spineIdRefs.add(idref)
             }
         }
 
         // Parse Table of Contents if available (NCX or EPUB3 nav)
-        val chapters = mutableListOf<Chapter>()
         val tocItem = if (tocId != null) {
             manifestItems[tocId]
         } else {
@@ -151,13 +174,14 @@ object EpubParser {
             }
         }
 
-        val titlesByHref = mutableMapOf<String, String>()
+        // Keyed by canonical path so hrefs relative to the TOC file resolve correctly.
+        val titlesByPath = mutableMapOf<String, String>()
         if (tocItem != null) {
-            val tocDecodedHref = URLDecoder.decode(tocItem.href, "UTF-8")
-            val tocFile = File(opfDir, tocDecodedHref)
-            if (tocFile.exists()) {
+            val tocFile = PathSafety.resolveWithin(rootDir, opfDir, tocItem.href)
+            if (tocFile != null && tocFile.exists()) {
                 try {
                     val tocDoc = docBuilder.parse(tocFile)
+                    val tocDir = tocFile.parentFile ?: opfDir
                     if (tocItem.mediaType == "application/x-dtbncx+xml") {
                         val navPoints = tocDoc.getElementsByTagName("navPoint")
                         for (i in 0 until navPoints.length) {
@@ -165,8 +189,9 @@ object EpubParser {
                             val label = np.getElementsByTagName("text").item(0)?.textContent?.trim()
                             val src = np.getElementsByTagName("content").item(0)?.attributes?.getNamedItem("src")?.nodeValue
                             if (!label.isNullOrBlank() && !src.isNullOrBlank()) {
-                                val cleanSrc = src.substringBefore("#")
-                                titlesByHref[cleanSrc] = label
+                                PathSafety.resolveWithin(rootDir, tocDir, src)?.let { target ->
+                                    titlesByPath[target.canonicalPath] = label
+                                }
                             }
                         }
                     } else {
@@ -177,34 +202,34 @@ object EpubParser {
                             val label = a.textContent?.trim()
                             val href = a.getAttribute("href")
                             if (!label.isNullOrBlank() && href.isNotBlank()) {
-                                val cleanHref = href.substringBefore("#")
-                                titlesByHref[cleanHref] = label
+                                PathSafety.resolveWithin(rootDir, tocDir, href)?.let { target ->
+                                    titlesByPath[target.canonicalPath] = label
+                                }
                             }
                         }
                     }
                 } catch (_: Exception) {
-                    // TOC parsing fallback
+                    // TOC parsing fallback: chapter titles are read from the HTML files.
                 }
             }
         }
 
         // Build Chapter list from spine items
+        val chapters = mutableListOf<Chapter>()
         spineIdRefs.forEachIndexed { index, idref ->
+            cancellationCheck()
             val item = manifestItems[idref]
             if (item != null) {
-                val decodedHref = URLDecoder.decode(item.href, "UTF-8")
-                val chapterFile = File(opfDir, decodedHref)
-                if (chapterFile.exists()) {
-                    var chapterTitle = titlesByHref[item.href] ?: titlesByHref[decodedHref]
-                    if (chapterTitle.isNullOrBlank()) {
-                        // Try reading title from html file
-                        chapterTitle = extractTitleFromHtml(chapterFile) ?: "Chapter ${index + 1}"
-                    }
+                val chapterFile = PathSafety.resolveWithin(rootDir, opfDir, item.href)
+                if (chapterFile != null && chapterFile.exists()) {
+                    val chapterTitle = titlesByPath[chapterFile.canonicalPath]
+                        ?: extractTitleFromHtml(chapterFile)
+                        ?: "Chapter ${index + 1}"
                     chapters.add(
                         Chapter(
-                            index = index,
+                            index = chapters.size,
                             title = chapterTitle,
-                            href = decodedHref,
+                            href = chapterFile.relativeTo(rootDir).path,
                             absolutePath = chapterFile.absolutePath
                         )
                     )
@@ -212,20 +237,23 @@ object EpubParser {
             }
         }
 
-        // If spine items are empty, find all xhtml/html files
+        // If spine items are empty, find all content xhtml/html files.
         if (chapters.isEmpty()) {
             val htmlFiles = opfDir.walkTopDown()
                 .filter { it.isFile && (it.extension == "xhtml" || it.extension == "html") }
-                .sortedBy { it.name }
+                .filterNot { it.name.equals("nav.xhtml", true) || it.name.equals("toc.xhtml", true) }
+                .filterNot { it.name.startsWith("toc", ignoreCase = true) && it.name.endsWith(".html", true) }
+                .sortedWith(compareByNaturalName())
                 .toList()
 
             htmlFiles.forEachIndexed { index, file ->
+                cancellationCheck()
                 val titleFromContent = extractTitleFromHtml(file) ?: "Chapter ${index + 1}"
                 chapters.add(
                     Chapter(
                         index = index,
                         title = titleFromContent,
-                        href = file.name,
+                        href = file.relativeTo(rootDir).path,
                         absolutePath = file.absolutePath
                     )
                 )
@@ -241,21 +269,40 @@ object EpubParser {
         )
     }
 
+    private fun secureDocumentBuilderFactory(): DocumentBuilderFactory {
+        val factory = DocumentBuilderFactory.newInstance()
+        factory.isNamespaceAware = true
+        // Some Android parser implementations (Harmony) throw for these setters even
+        // though the defaults already match; guard so imports work on-device.
+        runCatching { factory.isXIncludeAware = false }
+        runCatching { factory.isExpandEntityReferences = false }
+        fun feature(name: String, enabled: Boolean) {
+            runCatching { factory.setFeature(name, enabled) }
+        }
+        feature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
+        feature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        feature("http://xml.org/sax/features/external-general-entities", false)
+        feature("http://xml.org/sax/features/external-parameter-entities", false)
+        feature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+        return factory
+    }
+
     private fun findOpfFile(rootDir: File): File? {
         val containerFile = File(rootDir, "META-INF/container.xml")
         if (containerFile.exists()) {
             try {
-                val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(containerFile)
+                val doc = secureDocumentBuilderFactory().newDocumentBuilder().parse(containerFile)
                 val rootFiles = doc.getElementsByTagName("rootfile")
                 if (rootFiles.length > 0) {
                     val rootFileElem = rootFiles.item(0) as Element
                     val fullPath = rootFileElem.getAttribute("full-path")
                     if (fullPath.isNotBlank()) {
-                        val opf = File(rootDir, fullPath)
-                        if (opf.exists()) return opf
+                        val opf = PathSafety.resolveWithin(rootDir, fullPath)
+                        if (opf != null && opf.exists()) return opf
                     }
                 }
             } catch (_: Exception) {
+                // Fall through to the recursive search below.
             }
         }
 
@@ -265,7 +312,7 @@ object EpubParser {
 
     private fun extractTitleFromHtml(file: File): String? {
         return try {
-            val content = file.readText()
+            val content = readTextLimited(file)
             // Look for <title>...</title>
             val titleRegex = "<title[^>]*>(.*?)</title>".toRegex(RegexOption.IGNORE_CASE)
             val titleMatch = titleRegex.find(content)?.groupValues?.get(1)?.trim()
@@ -281,28 +328,85 @@ object EpubParser {
         }
     }
 
-    private fun unzip(inputStream: InputStream, destinationDir: File) {
-        val zipIn = ZipInputStream(inputStream)
-        var entry = zipIn.nextEntry
-        val destCanonicalPath = destinationDir.canonicalPath
-
-        while (entry != null) {
-            val file = File(destinationDir, entry.name)
-            // Path traversal security check (Zip Slip mitigation)
-            if (!file.canonicalPath.startsWith(destCanonicalPath)) {
-                throw SecurityException("Zip entry is outside of target directory: ${entry.name}")
+    private fun readTextLimited(file: File, maxBytes: Int = 512 * 1024): String {
+        val limit = minOf(maxBytes.toLong(), file.length()).toInt().coerceAtLeast(1)
+        return file.inputStream().use { input ->
+            val buffer = ByteArray(limit)
+            var total = 0
+            while (total < limit) {
+                val read = input.read(buffer, total, limit - total)
+                if (read <= 0) break
+                total += read
             }
+            String(buffer, 0, total, Charsets.UTF_8)
+        }
+    }
 
-            if (entry.isDirectory) {
-                file.mkdirs()
+    private fun compareByNaturalName(): Comparator<File> = Comparator { a, b ->
+        val aParts = a.name.split(Regex("(\\d+)"))
+        val bParts = b.name.split(Regex("(\\d+)"))
+        val size = minOf(aParts.size, bParts.size)
+        for (i in 0 until size) {
+            val aPart = aParts[i]
+            val bPart = bParts[i]
+            val cmp = if (i % 2 == 1) {
+                aPart.toLongOrNull().orZero().compareTo(bPart.toLongOrNull().orZero())
             } else {
-                file.parentFile?.mkdirs()
-                file.outputStream().use { output ->
-                    zipIn.copyTo(output)
-                }
+                aPart.compareTo(bPart, ignoreCase = true)
             }
-            zipIn.closeEntry()
-            entry = zipIn.nextEntry
+            if (cmp != 0) return@Comparator cmp
+        }
+        aParts.size.compareTo(bParts.size)
+    }
+
+    private fun Long?.orZero(): Long = this ?: 0L
+
+    private fun unzip(
+        inputStream: InputStream,
+        destinationDir: File,
+        cancellationCheck: () -> Unit
+    ) {
+        val destPath = destinationDir.canonicalFile.toPath()
+        var entryCount = 0
+        var totalBytes = 0L
+        ZipInputStream(inputStream).use { zipIn ->
+            var entry = zipIn.nextEntry
+            while (entry != null) {
+                cancellationCheck()
+                entryCount++
+                if (entryCount > MAX_ENTRY_COUNT) {
+                    throw SecurityException("EPUB contains too many entries")
+                }
+                val target = destPath.resolve(entry.name).normalize()
+                if (!target.startsWith(destPath)) {
+                    throw SecurityException("Zip entry is outside of target directory: ${entry.name}")
+                }
+                if (entry.isDirectory) {
+                    target.toFile().mkdirs()
+                } else {
+                    val parent = target.parent ?: throw SecurityException("Invalid zip entry: ${entry.name}")
+                    parent.toFile().mkdirs()
+                    var entryBytes = 0L
+                    target.toFile().outputStream().use { output ->
+                        val buffer = ByteArray(COPY_BUFFER_SIZE)
+                        while (true) {
+                            cancellationCheck()
+                            val read = zipIn.read(buffer)
+                            if (read <= 0) break
+                            entryBytes += read
+                            totalBytes += read
+                            if (entryBytes > MAX_SINGLE_ENTRY_BYTES ||
+                                totalBytes > MAX_TOTAL_UNCOMPRESSED_BYTES
+                            ) {
+                                throw SecurityException("EPUB is too large when extracted")
+                            }
+                            output.write(buffer, 0, read)
+                        }
+                    }
+                }
+                zipIn.closeEntry()
+                entry = zipIn.nextEntry
+            }
         }
     }
 }

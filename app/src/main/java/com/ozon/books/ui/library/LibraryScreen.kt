@@ -1,10 +1,7 @@
 package com.ozon.books.ui.library
 
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -71,7 +68,11 @@ fun LibraryScreen(
         }
 
         when (sortOrder) {
-            BookSortOrder.RECENT -> filtered.sortedByDescending { it.addedTimestamp }
+            BookSortOrder.RECENTLY_ADDED -> filtered.sortedByDescending { it.addedTimestamp }
+            BookSortOrder.RECENTLY_READ -> filtered.sortedWith(
+                compareByDescending<Book> { it.isRecentlyRead }
+                    .thenByDescending { it.lastReadTimestamp }
+            )
             BookSortOrder.TITLE -> filtered.sortedBy { it.title.lowercase() }
             BookSortOrder.AUTHOR -> filtered.sortedBy { it.author.lowercase() }
         }
@@ -145,7 +146,7 @@ fun LibraryScreen(
             },
             text = {
                 Text(
-                    text = "Are you sure you want to remove \"${book.title}\" from your library? Its extracted files will be deleted.",
+                    text = "Are you sure you want to remove \"${book.title}\" from your library? You can undo this right after.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },

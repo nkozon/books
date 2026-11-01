@@ -1,6 +1,5 @@
 package com.ozon.books.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -10,14 +9,10 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
-import androidx.core.view.WindowCompat
 import com.ozon.books.model.ThemeMode
 
 private val BaseDarkColorScheme = darkColorScheme(
@@ -66,31 +61,24 @@ fun BooksTheme(
     val context = LocalContext.current
     val effectiveDynamic = dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
-    val colorScheme = remember(darkTheme, effectiveDynamic, customAccentColor, isOledMode) {
+    val colorScheme = run {
         when {
             effectiveDynamic -> {
+                // Preserve every wallpaper-derived role, including all surface levels.
                 val base = if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-                if (darkTheme) {
-                    if (isOledMode) {
-                        base.copy(
-                            background = Color.Black,
-                            surface = Color.Black,
-                            surfaceContainerLow = Color(0xFF0F0F0F),
-                            surfaceContainer = Color(0xFF141414),
-                            surfaceContainerHigh = Color(0xFF1E1E1E)
-                        )
-                    } else {
-                        base.copy(
-                            surfaceContainerLow = Color(0xFF1D1B20),
-                            surfaceContainerHigh = Color(0xFF2B2930)
-                        )
-                    }
-                } else {
+                if (darkTheme && isOledMode) {
                     base.copy(
-                        surfaceContainerLow = Color.White,
-                        surfaceContainerHigh = Color(0xFFECE6F0)
+                        background = Color.Black,
+                        surface = Color.Black,
+                        surfaceDim = Color.Black,
+                        surfaceBright = lerp(base.surfaceBright, Color.Black, 0.35f),
+                        surfaceContainerLowest = Color.Black,
+                        surfaceContainerLow = lerp(base.surfaceContainerLow, Color.Black, 0.55f),
+                        surfaceContainer = lerp(base.surfaceContainer, Color.Black, 0.45f),
+                        surfaceContainerHigh = lerp(base.surfaceContainerHigh, Color.Black, 0.35f),
+                        surfaceContainerHighest = lerp(base.surfaceContainerHighest, Color.Black, 0.25f)
                     )
-                }
+                } else base
             }
 
             customAccentColor != null -> {
@@ -145,19 +133,6 @@ fun BooksTheme(
             }
 
             else -> BaseLightColorScheme
-        }
-    }
-
-    val view = LocalView.current
-    if (!view.isInEditMode) {
-        SideEffect {
-            val window = (view.context as? Activity)?.window
-            if (window != null) {
-                window.statusBarColor = Color.Transparent.toArgb()
-                window.navigationBarColor = Color.Transparent.toArgb()
-                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
-                WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !darkTheme
-            }
         }
     }
 

@@ -1,6 +1,5 @@
 package com.ozon.books.ui.components
 
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -14,8 +13,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,9 +32,6 @@ import com.ozon.books.ui.theme.AccentBookCover1
 import com.ozon.books.ui.theme.AccentBookCover2
 import com.ozon.books.ui.theme.AccentBookCover3
 import com.ozon.books.ui.theme.AccentBookCover4
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.File
 import kotlin.math.abs
 
 @Composable
@@ -44,19 +40,7 @@ fun BookCoverView(
     modifier: Modifier = Modifier
 ) {
     val coverBitmap = produceState<android.graphics.Bitmap?>(initialValue = null, key1 = book.coverImagePath) {
-        val path = book.coverImagePath
-        if (!path.isNullOrBlank()) {
-            val file = File(path)
-            if (file.exists()) {
-                value = withContext(Dispatchers.IO) {
-                    try {
-                        BitmapFactory.decodeFile(file.absolutePath)
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-            }
-        }
+        value = BookImageLoader.load(book.coverImagePath, 400, 600)
     }
 
     val shape = RoundedCornerShape(8.dp)
