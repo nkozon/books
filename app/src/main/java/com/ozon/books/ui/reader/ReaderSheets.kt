@@ -1,5 +1,6 @@
 package com.ozon.books.ui.reader
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
@@ -60,7 +61,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
@@ -70,6 +70,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.dismiss
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -82,11 +86,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -625,7 +625,7 @@ private class ReaderPanelGesture(
 
 private val LocalReaderPanelGesture = staticCompositionLocalOf { ReaderPanelGesture() }
 
-/** Phone bottom sheet or floating tablet panel anchored to the physical right. */
+/** Phone bottom sheet or right-side tablet panel with equal vertical safe-area margins. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun ReaderSidePanel(
@@ -646,8 +646,7 @@ private fun ReaderSidePanel(
         }
     }
     LaunchedEffect(Unit) { reveal.animateTo(1f, tween(300)) }
-    // Read stable insets from the reader window before entering the Dialog. Dialog
-    // insets can be zero/consumed, especially while the reader is immersive.
+    // Measure in the reader's own window so foldable and multi-window bounds match.
     val density = LocalDensity.current
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var resetJob by remember { mutableStateOf<Job?>(null) }
@@ -712,55 +711,50 @@ private fun ReaderSidePanel(
             bottom = systemInsets.getBottom(this).toDp()
         )
     }
-    Dialog(
-        onDismissRequest = dismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
-    ) {
-        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
-        SideEffect {
-            dialogWindow?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-            dialogWindow?.setDimAmount(0f)
-            dialogWindow?.setWindowAnimations(0)
+    BackHandler(onBack = dismiss)
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize().zIndex(10f).semantics {
+            paneTitle = "Reader panel"
+            dismiss { dismiss(); true }
         }
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val panelWidth = if (isTablet) minOf((maxWidth - 32.dp).coerceAtLeast(0.dp), 440.dp) else maxWidth
-            val panelWidthPx = with(LocalDensity.current) { panelWidth.toPx() }
-            val travelHeightPx = with(LocalDensity.current) { maxHeight.toPx() }
-            val panelShape = if (isTablet) RoundedCornerShape(28.dp)
-                else RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-            Box(
-                modifier = Modifier.fillMaxSize()
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.42f * reveal.value))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = dismiss
-                    )
-            )
-            Box(modifier = Modifier.fillMaxSize().padding(panelInsets).padding(
-                if (isTablet) PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 48.dp)
-                else PaddingValues(0.dp)
-            )) {
-                Surface(
-                    modifier = Modifier
-                        .align(if (isTablet) AbsoluteAlignment.CenterRight else Alignment.BottomCenter)
-                        .width(panelWidth)
-                        .fillMaxHeight(if (isTablet) 1f else 0.9f)
-                        .clip(panelShape)
-                        .absoluteOffset {
-                            if (isTablet) IntOffset(((1f - reveal.value) * panelWidthPx * 1.1f).roundToInt(), 0)
-                            else IntOffset(0, ((1f - reveal.value) * travelHeightPx + dragOffset).roundToInt())
-                        }
-                        .nestedScroll(scrollConnection),
-                    shape = panelShape,
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 16.dp
-                ) {
-                    CompositionLocalProvider(
-                        LocalReaderPanelGesture provides ReaderPanelGesture(!isTablet, drag, release)
-                    ) {
-                        content(dismiss)
+    ) {
+        val panelWidth = if (isTablet) minOf((maxWidth - 32.dp).coerceAtLeast(0.dp), 440.dp) else maxWidth
+        val horizontalTravelPx = with(LocalDensity.current) { maxWidth.toPx() }
+        val travelHeightPx = with(LocalDensity.current) { maxHeight.toPx() }
+        val panelShape = if (isTablet) RoundedCornerShape(28.dp)
+            else RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+        Box(
+            modifier = Modifier.fillMaxSize()
+                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.42f * reveal.value))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = dismiss
+                )
+        )
+        Box(modifier = Modifier.fillMaxSize().padding(panelInsets).padding(
+            if (isTablet) PaddingValues(start = 16.dp, top = 48.dp, end = 16.dp, bottom = 48.dp)
+            else PaddingValues(0.dp)
+        )) {
+            Surface(
+                modifier = Modifier
+                    .align(if (isTablet) AbsoluteAlignment.CenterRight else Alignment.BottomCenter)
+                    .width(panelWidth)
+                    .fillMaxHeight(if (isTablet) 1f else 0.9f)
+                    .clip(panelShape)
+                    .absoluteOffset {
+                        if (isTablet) IntOffset(((1f - reveal.value) * horizontalTravelPx).roundToInt(), 0)
+                        else IntOffset(0, ((1f - reveal.value) * travelHeightPx + dragOffset).roundToInt())
                     }
+                    .nestedScroll(scrollConnection),
+                shape = panelShape,
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 16.dp
+            ) {
+                CompositionLocalProvider(
+                    LocalReaderPanelGesture provides ReaderPanelGesture(!isTablet, drag, release)
+                ) {
+                    content(dismiss)
                 }
             }
         }

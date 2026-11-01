@@ -1,5 +1,8 @@
 package com.ozon.books.ui.home
 
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -25,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,18 +64,38 @@ fun HomeScreen(
     } else {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = contentPadding
+            contentPadding = PaddingValues(
+                top = contentPadding.calculateTopPadding(),
+                bottom = contentPadding.calculateBottomPadding()
+            )
         ) {
             item {
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(20.dp)
-                ) {
-                    items(recentlyReadBooks, key = { it.id }) { book ->
-                        RecentBookCard(
-                            book = book,
-                            onClick = { onBookClick(book.id) }
-                        )
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    val isMobile = maxWidth < 600.dp
+                    val direction = LocalLayoutDirection.current
+                    val rowPadding = if (isMobile) PaddingValues(horizontal = 16.dp) else PaddingValues(
+                        start = contentPadding.calculateStartPadding(direction),
+                        end = contentPadding.calculateEndPadding(direction)
+                    )
+                    val visibleColumns = if (isMobile && maxWidth >= 320.dp && recentlyReadBooks.size > 1) 2 else 1
+                    val cardWidth = if (isMobile) {
+                        minOf(204.dp, ((maxWidth - 32.dp - 20.dp * (visibleColumns - 1)) / visibleColumns)
+                            .coerceAtLeast(0.dp))
+                    } else 204.dp
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = rowPadding,
+                        horizontalArrangement = if (isMobile) {
+                            Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally)
+                        } else Arrangement.spacedBy(20.dp)
+                    ) {
+                        items(recentlyReadBooks, key = { it.id }) { book ->
+                            RecentBookCard(
+                                book = book,
+                                modifier = Modifier.width(cardWidth),
+                                onClick = { onBookClick(book.id) }
+                            )
+                        }
                     }
                 }
             }
@@ -82,6 +106,7 @@ fun HomeScreen(
 @Composable
 private fun RecentBookCard(
     book: Book,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val progress = book.progressPercent.coerceIn(0, 100)
@@ -90,7 +115,7 @@ private fun RecentBookCard(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = Modifier.width(204.dp)
+        modifier = modifier
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             BookCoverView(

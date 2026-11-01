@@ -63,6 +63,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -81,11 +82,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.ozon.books.data.PreferencesManager
@@ -247,9 +246,8 @@ private fun MainScreen(
     onDeleteBook: (String) -> Unit,
     preferencesManager: PreferencesManager
 ) {
-    val tabNavController = rememberNavController()
-    val backStackEntry by tabNavController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route ?: "home"
+    var currentRoute by rememberSaveable { mutableStateOf("home") }
+    val tabStateHolder = rememberSaveableStateHolder()
     val currentTitle = MainTabs.firstOrNull { it.route == currentRoute }?.title ?: "Home"
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -285,11 +283,11 @@ private fun MainScreen(
     fun navigateTab(route: String) {
         if (route == currentRoute) return
         closeSearch()
-        tabNavController.navigate(route) {
-            popUpTo(tabNavController.graph.findStartDestination().id) { saveState = true }
-            launchSingleTop = true
-            restoreState = true
-        }
+        currentRoute = route
+    }
+
+    BackHandler(enabled = currentRoute != "home" && !isSearchActive) {
+        navigateTab("home")
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -374,7 +372,8 @@ private fun MainScreen(
                 topBar = {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.background.copy(alpha = 0.96f)
+                        color = if (currentRoute == "settings") Color.Transparent
+                            else MaterialTheme.colorScheme.background.copy(alpha = 0.96f)
                     ) {
                         Column(
                             modifier = Modifier
@@ -461,7 +460,7 @@ private fun MainScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(innerPadding)
+                        .padding(if (currentRoute == "settings") PaddingValues(0.dp) else innerPadding)
                 ) {
                     if (!isLoaded) {
                         Box(
@@ -471,56 +470,59 @@ private fun MainScreen(
                             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                         }
                     } else {
-                        NavHost(
-                            navController = tabNavController,
-                            startDestination = "home",
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            composable("home") {
-                                HomeScreen(
-                                    recentlyReadBooks = recentlyReadBooks,
-                                    hasBooksInLibrary = books.isNotEmpty(),
-                                    onBookClick = onOpenBook,
-                                    onNavigateToLibrary = { navigateTab("library") },
-                                    onImportBookClick = onImportClick,
-                                    contentPadding = screenPadding
-                                )
-                            }
-                            composable("library") {
-                                LibraryScreen(
-                                    books = books,
-                                    searchQuery = searchQuery,
-                                    sortOrder = sortOrder,
-                                    onBookClick = onOpenBook,
-                                    onDeleteBook = onDeleteBook,
-                                    onImportBookClick = onImportClick,
-                                    contentPadding = screenPadding
-                                )
-                            }
-                            composable("settings") {
-                                SettingsScreen(
-                                    currentTheme = themeMode,
-                                    onThemeSelected = preferencesManager::setThemeMode,
-                                    isOledMode = isOledMode,
-                                    onOledModeChanged = preferencesManager::setIsOledMode,
-                                    useDynamicColor = useDynamicColor,
-                                    onDynamicColorChanged = preferencesManager::setUseDynamicColor,
-                                    customAccentColor = customAccentColor,
-                                    onCustomAccentColorChanged = preferencesManager::setCustomAccentColor,
-                                    fontSizePx = fontSizePx,
-                                    onFontSizeChanged = preferencesManager::setFontSizePx,
-                                    lineHeightMultiplier = lineHeightMultiplier,
-                                    onLineHeightChanged = preferencesManager::setLineHeightMultiplier,
-                                    typeface = typeface,
-                                    onTypefaceChanged = preferencesManager::setTypeface,
-                                    isJustified = isJustified,
-                                    onJustifiedChanged = preferencesManager::setIsJustified,
-                                    isPaginated = isPaginated,
-                                    onPaginatedChanged = preferencesManager::setIsPaginated,
-                                    readerBgTheme = readerBgTheme,
-                                    onReaderBgThemeChanged = preferencesManager::setReaderBgTheme,
-                                    contentPadding = screenPadding
-                                )
+                        tabStateHolder.SaveableStateProvider(currentRoute) {
+                            when (currentRoute) {
+                                "home" -> {
+                                    HomeScreen(
+                                        recentlyReadBooks = recentlyReadBooks,
+                                        hasBooksInLibrary = books.isNotEmpty(),
+                                        onBookClick = onOpenBook,
+                                        onNavigateToLibrary = { navigateTab("library") },
+                                        onImportBookClick = onImportClick,
+                                        contentPadding = screenPadding
+                                    )
+                                }
+                                "library" -> {
+                                    LibraryScreen(
+                                        books = books,
+                                        searchQuery = searchQuery,
+                                        sortOrder = sortOrder,
+                                        onBookClick = onOpenBook,
+                                        onDeleteBook = onDeleteBook,
+                                        onImportBookClick = onImportClick,
+                                        contentPadding = screenPadding
+                                    )
+                                }
+                                "settings" -> {
+                                    SettingsScreen(
+                                        currentTheme = themeMode,
+                                        onThemeSelected = preferencesManager::setThemeMode,
+                                        isOledMode = isOledMode,
+                                        onOledModeChanged = preferencesManager::setIsOledMode,
+                                        useDynamicColor = useDynamicColor,
+                                        onDynamicColorChanged = preferencesManager::setUseDynamicColor,
+                                        customAccentColor = customAccentColor,
+                                        onCustomAccentColorChanged = preferencesManager::setCustomAccentColor,
+                                        fontSizePx = fontSizePx,
+                                        onFontSizeChanged = preferencesManager::setFontSizePx,
+                                        lineHeightMultiplier = lineHeightMultiplier,
+                                        onLineHeightChanged = preferencesManager::setLineHeightMultiplier,
+                                        typeface = typeface,
+                                        onTypefaceChanged = preferencesManager::setTypeface,
+                                        isJustified = isJustified,
+                                        onJustifiedChanged = preferencesManager::setIsJustified,
+                                        isPaginated = isPaginated,
+                                        onPaginatedChanged = preferencesManager::setIsPaginated,
+                                        readerBgTheme = readerBgTheme,
+                                        onReaderBgThemeChanged = preferencesManager::setReaderBgTheme,
+                                        contentPadding = PaddingValues(
+                                            start = horizontalContentPadding,
+                                            end = horizontalContentPadding,
+                                            top = innerPadding.calculateTopPadding() + 8.dp,
+                                            bottom = listBottomPadding
+                                        )
+                                    )
+                                }
                             }
                         }
                     }

@@ -631,65 +631,65 @@ fun ReaderScreen(
                 onNext = { turnPage(true) }
             )
         }
-    }
 
-    if (showTocSheet) {
-        ReaderTocSheet(
-            chapters = state.chapters,
-            currentChapterIndex = state.currentChapterIndex,
-            bookmarks = state.bookmarks,
-            onChapterSelected = { index ->
-                showTocSheet = false
-                readerViewModel.goToChapter(index)
-            },
-            onBookmarkSelected = { bookmark ->
-                showTocSheet = false
-                readerViewModel.openBookmark(bookmark)
-            },
-            onBookmarkRemoved = readerViewModel::removeBookmark,
-            onDismiss = { showTocSheet = false }
-        )
-    }
+        if (showTocSheet) {
+            ReaderTocSheet(
+                chapters = state.chapters,
+                currentChapterIndex = state.currentChapterIndex,
+                bookmarks = state.bookmarks,
+                onChapterSelected = { index ->
+                    showTocSheet = false
+                    readerViewModel.goToChapter(index)
+                },
+                onBookmarkSelected = { bookmark ->
+                    showTocSheet = false
+                    readerViewModel.openBookmark(bookmark)
+                },
+                onBookmarkRemoved = readerViewModel::removeBookmark,
+                onDismiss = { showTocSheet = false }
+            )
+        }
 
-    if (showSearchSheet) {
-        ReaderSearchSheet(
-            query = state.searchQuery,
-            onQueryChange = { query ->
-                readerViewModel.search(query)
-            },
-            results = state.searchResults,
-            isSearching = state.isSearching,
-            searchCompleted = state.searchCompleted,
-            onResultSelected = { result ->
-                showSearchSheet = false
-                readerViewModel.openSearchResult(result)
-            },
-            onDismiss = {
-                showSearchSheet = false
-                readerViewModel.clearSearch()
-            }
-        )
-    }
+        if (showSearchSheet) {
+            ReaderSearchSheet(
+                query = state.searchQuery,
+                onQueryChange = { query ->
+                    readerViewModel.search(query)
+                },
+                results = state.searchResults,
+                isSearching = state.isSearching,
+                searchCompleted = state.searchCompleted,
+                onResultSelected = { result ->
+                    showSearchSheet = false
+                    readerViewModel.openSearchResult(result)
+                },
+                onDismiss = {
+                    showSearchSheet = false
+                    readerViewModel.clearSearch()
+                }
+            )
+        }
 
-    if (showSettingsSheet) {
-        ReaderSettingsSheet(
-            fontSizePx = fontSizePx,
-            lineHeightMultiplier = lineHeightMultiplier,
-            typeface = typeface,
-            isJustified = isJustified,
-            isPaginated = isPaginated,
-            twoPageReading = twoPageReading,
-            isTablet = isTablet,
-            onTwoPageReadingChange = preferencesManager::setTwoPageReading,
-            backgroundTheme = readerBgTheme,
-            onFontSizeChange = preferencesManager::setFontSizePx,
-            onLineHeightChange = preferencesManager::setLineHeightMultiplier,
-            onTypefaceChange = preferencesManager::setTypeface,
-            onJustifiedChange = preferencesManager::setIsJustified,
-            onPaginatedChange = preferencesManager::setIsPaginated,
-            onBackgroundThemeChange = preferencesManager::setReaderBgTheme,
-            onDismiss = { showSettingsSheet = false }
-        )
+        if (showSettingsSheet) {
+            ReaderSettingsSheet(
+                fontSizePx = fontSizePx,
+                lineHeightMultiplier = lineHeightMultiplier,
+                typeface = typeface,
+                isJustified = isJustified,
+                isPaginated = isPaginated,
+                twoPageReading = twoPageReading,
+                isTablet = isTablet,
+                onTwoPageReadingChange = preferencesManager::setTwoPageReading,
+                backgroundTheme = readerBgTheme,
+                onFontSizeChange = preferencesManager::setFontSizePx,
+                onLineHeightChange = preferencesManager::setLineHeightMultiplier,
+                onTypefaceChange = preferencesManager::setTypeface,
+                onJustifiedChange = preferencesManager::setIsJustified,
+                onPaginatedChange = preferencesManager::setIsPaginated,
+                onBackgroundThemeChange = preferencesManager::setReaderBgTheme,
+                onDismiss = { showSettingsSheet = false }
+            )
+        }
     }
 }
 
