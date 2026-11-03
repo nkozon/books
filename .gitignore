@@ -10,8 +10,7 @@
 .DS_Store
 /build
 app/build
-app/release
-app/build.gradle.kts
+app/releasec
 app/proguard-rules.pro
 /captures
 .externalNativeBuild
